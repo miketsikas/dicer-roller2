@@ -34,11 +34,12 @@ import {
   type RoomPresenceEvent,
   type RoomPresenceMember
 } from './realtime/roomService';
-import { isRealtimeConfigured } from './realtime/supabaseClient';
+import { getSupabaseClient, isRealtimeConfigured } from './realtime/supabaseClient';
 import type { DiceCounts, RollEntry } from './types';
 
 const CAROUSEL_INTERVAL_MS = 12_000;
 const PAGE_SIZE = 100;
+const ROOM_SYNC_INTERVAL_MS = 8_000;
 
 function nextBackgroundId(currentId: string, direction: 1 | -1): string {
   const index = BACKGROUNDS.findIndex((background) => background.id === currentId);
@@ -233,7 +234,7 @@ export default function App(): JSX.Element {
         setActiveReplayId(null);
 
         const page = await fetchRoomRollPage({ roomCode: normalizedCode, limit: PAGE_SIZE });
-        setRoomEntries(page);
+        setRoomEntries((previous) => mergeRollEntriesNewestFirst(previous, page));
         setHasMoreRoomHistory(page.length === PAGE_SIZE);
 
         commit((previous) => ({
@@ -281,6 +282,22 @@ export default function App(): JSX.Element {
       setLoadingMoreHistory(false);
     }
   }, [connectedRoomCode, hasMoreRoomHistory, loadingMoreHistory, roomEntries]);
+
+  const syncLatestRoomEntries = useCallback(async (): Promise<void> => {
+    if (!connectedRoomCode || activeReplayId) {
+      return;
+    }
+
+    try {
+      const latestPage = await fetchRoomRollPage({
+        roomCode: connectedRoomCode,
+        limit: PAGE_SIZE
+      });
+      setRoomEntries((previous) => mergeRollEntriesNewestFirst(previous, latestPage));
+    } catch {
+      // Ignore: this is a best-effort fallback when realtime events are missed.
+    }
+  }, [activeReplayId, connectedRoomCode]);
 
   useEffect(() => {
     if (!data || initializedRef.current) {
@@ -345,11 +362,53 @@ export default function App(): JSX.Element {
   }, [realtimeReady]);
 
   useEffect(() => {
+    if (!realtimeReady) {
+      return;
+    }
+    const client = getSupabaseClient();
+    if (!client) {
+      return;
+    }
+
+    const { data } = client.auth.onAuthStateChange((_event, session) => {
+      if (session?.access_token) {
+        void client.realtime.setAuth(session.access_token);
+      }
+    });
+
+    return () => {
+      data.subscription.unsubscribe();
+    };
+  }, [realtimeReady]);
+
+  useEffect(() => {
     if (!authUserId || !realtimeReady) {
       return;
     }
     void refreshAvailableRooms(true);
   }, [authUserId, connectedRoomCode, realtimeReady, refreshAvailableRooms]);
+
+  useEffect(() => {
+    if (!connectedRoomCode || activeReplayId) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void syncLatestRoomEntries();
+    }, ROOM_SYNC_INTERVAL_MS);
+
+    const handleVisibility = (): void => {
+      if (document.visibilityState === 'visible') {
+        void syncLatestRoomEntries();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [activeReplayId, connectedRoomCode, syncLatestRoomEntries]);
 
   useEffect(() => {
     if (!data?.preferences.autoCarousel) {

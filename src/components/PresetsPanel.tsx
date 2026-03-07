@@ -13,6 +13,7 @@ interface PresetsPanelProps {
 
 export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, onApply, className }: PresetsPanelProps): JSX.Element {
   const [newName, setNewName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
 
   return (
     <section className={`panel ${className ?? ''}`.trim()}>
@@ -20,14 +21,27 @@ export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, 
       <div className="row gap-sm">
         <input
           value={newName}
-          onChange={(event) => setNewName(event.target.value)}
+          onChange={(event) => {
+            setNewName(event.target.value);
+            if (createError) {
+              setCreateError(null);
+            }
+          }}
           placeholder="Preset name"
           maxLength={40}
           aria-label="New preset name"
+          aria-invalid={!!createError}
         />
         <button
           type="button"
           onClick={() => {
+            const trimmed = newName.trim();
+            if (!trimmed) {
+              setCreateError('Preset name is required.');
+              return;
+            }
+
+            setCreateError(null);
             onCreate(newName);
             setNewName('');
           }}
@@ -35,6 +49,7 @@ export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, 
           Save Current
         </button>
       </div>
+      {createError ? <p className="error-text">{createError}</p> : null}
 
       <div className="presets-scroll">
         <ul className="item-list" aria-label="Saved presets">

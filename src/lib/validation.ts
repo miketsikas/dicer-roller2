@@ -40,8 +40,11 @@ export function validateRoomCode(roomCode: string): string | null {
 
 export function validatePresetName(name: string): string | null {
   const value = name.trim();
-  if (value.length < 1 || value.length > 40) {
-    return 'Preset name must be between 1 and 40 characters.';
+  if (value.length < 1) {
+    return 'Preset name is required.';
+  }
+  if (value.length > 40) {
+    return 'Preset name must be 40 characters or fewer.';
   }
   return null;
 }
