@@ -33,6 +33,7 @@ button,
 input[type='text'],
 input[type='number'],
 input[type='file'],
+select,
 input:not([type]) {
   border: 1px solid rgba(112, 143, 196, 0.52);
   border-radius: 10px;

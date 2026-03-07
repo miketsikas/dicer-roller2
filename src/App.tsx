@@ -22,6 +22,7 @@ import { createId } from './lib/uuid';
 import { normalizeAlias, normalizeRoomCode, sanitizePositiveInt, validateAlias, validateRoomCode, validateRoomName } from './lib/validation';
 import { mergeRollEntriesNewestFirst, oldestTimestamp } from './realtime/feed';
 import {
+  fetchAvailableRooms,
   ensureAnonymousUser,
   fetchRoomRollPage,
   insertRoomRoll,
@@ -29,6 +30,7 @@ import {
   subscribeRoom,
   unsubscribeRoom,
   upsertRoomMembership,
+  type AvailableRoom,
   type RoomPresenceEvent,
   type RoomPresenceMember
 } from './realtime/roomService';
@@ -91,6 +93,8 @@ export default function App(): JSX.Element {
   const [roomEntries, setRoomEntries] = useState<RollEntry[]>([]);
   const [hasMoreRoomHistory, setHasMoreRoomHistory] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
+  const [availableRooms, setAvailableRooms] = useState<AvailableRoom[]>([]);
+  const [loadingRooms, setLoadingRooms] = useState(false);
   const [presenceMembers, setPresenceMembers] = useState<RoomPresenceMember[]>([]);
   const [presenceEvents, setPresenceEvents] = useState<RoomPresenceEvent[]>([]);
 
@@ -105,6 +109,31 @@ export default function App(): JSX.Element {
   const handlePresenceEvent = useCallback((event: RoomPresenceEvent): void => {
     setPresenceEvents((previous) => [event, ...previous].slice(0, 20));
   }, []);
+
+  const refreshAvailableRooms = useCallback(
+    async (silent = false): Promise<void> => {
+      if (!realtimeReady) {
+        setAvailableRooms([]);
+        return;
+      }
+
+      setLoadingRooms(true);
+      try {
+        const rooms = await fetchAvailableRooms(75);
+        setAvailableRooms(rooms);
+        if (!silent) {
+          setStatusMessage('Room list refreshed.');
+        }
+      } catch (roomError) {
+        if (!silent) {
+          setLocalError((roomError as Error).message);
+        }
+      } finally {
+        setLoadingRooms(false);
+      }
+    },
+    [realtimeReady]
+  );
 
   const leaveConnectedRoom = useCallback(
     async (silent = false): Promise<void> => {
@@ -129,6 +158,7 @@ export default function App(): JSX.Element {
         setPresenceEvents([]);
         setHasMoreRoomHistory(false);
         updateRoomParam(null);
+        void refreshAvailableRooms(true);
         if (!silent) {
           setStatusMessage('Left shared room.');
         }
@@ -136,7 +166,7 @@ export default function App(): JSX.Element {
         setLocalError((leaveError as Error).message);
       }
     },
-    [connectedRoomCode]
+    [connectedRoomCode, refreshAvailableRooms]
   );
 
   const connectToRoom = useCallback(
@@ -215,6 +245,7 @@ export default function App(): JSX.Element {
         }));
 
         updateRoomParam(normalizedCode);
+        void refreshAvailableRooms(true);
 
         if (!silent) {
           setStatusMessage(`Joined room ${normalizedCode}.`);
@@ -225,7 +256,7 @@ export default function App(): JSX.Element {
         setRoomConnecting(false);
       }
     },
-    [clearMessages, commit, connectedRoomCode, data, handlePresenceEvent, realtimeReady]
+    [clearMessages, commit, connectedRoomCode, data, handlePresenceEvent, realtimeReady, refreshAvailableRooms]
   );
 
   const loadMoreRoomHistory = useCallback(async (): Promise<void> => {
@@ -314,6 +345,13 @@ export default function App(): JSX.Element {
   }, [realtimeReady]);
 
   useEffect(() => {
+    if (!authUserId || !realtimeReady) {
+      return;
+    }
+    void refreshAvailableRooms(true);
+  }, [authUserId, connectedRoomCode, realtimeReady, refreshAvailableRooms]);
+
+  useEffect(() => {
     if (!data?.preferences.autoCarousel) {
       return;
     }
@@ -392,6 +430,11 @@ export default function App(): JSX.Element {
     }
     return groupFeedEntries(visibleEntries, data.moderation.spamWindowMs);
   }, [data, visibleEntries]);
+
+  const joinableRooms = useMemo(
+    () => availableRooms.filter((room) => room.roomCode !== connectedRoomCode),
+    [availableRooms, connectedRoomCode]
+  );
 
   const runRoll = (options: {
     source: RollEntry['source'];
@@ -785,6 +828,8 @@ export default function App(): JSX.Element {
               connecting={roomConnecting}
               members={presenceMembers}
               recentPresenceEvents={presenceEvents}
+              availableRooms={joinableRooms}
+              loadingRooms={loadingRooms}
               onRoomCodeChange={(value) =>
                 commit((previous) => ({
                   ...previous,
@@ -794,6 +839,19 @@ export default function App(): JSX.Element {
                   }
                 }))
               }
+              onSelectExistingRoom={(roomCode) => {
+                commit((previous) => ({
+                  ...previous,
+                  preferences: {
+                    ...previous.preferences,
+                    roomCode
+                  }
+                }));
+                void connectToRoom(roomCode);
+              }}
+              onRefreshRooms={() => {
+                void refreshAvailableRooms();
+              }}
               onJoin={() => {
                 void connectToRoom();
               }}

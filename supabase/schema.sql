@@ -104,6 +104,55 @@ $$;
 revoke all on function public.leave_room(text) from public;
 grant execute on function public.leave_room(text) to authenticated;
 
+create or replace function public.list_rooms(max_rows integer default 100)
+returns table (
+  room_code text,
+  active_members bigint,
+  last_activity_at timestamptz
+)
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  with room_codes as (
+    select upper(rm.room_code) as room_code
+    from public.room_members rm
+    union
+    select upper(rr.room_code) as room_code
+    from public.room_rolls rr
+  ),
+  member_stats as (
+    select
+      upper(rm.room_code) as room_code,
+      count(*)::bigint as active_members,
+      max(rm.last_seen_at) as last_seen_at
+    from public.room_members rm
+    group by upper(rm.room_code)
+  ),
+  roll_stats as (
+    select
+      upper(rr.room_code) as room_code,
+      max(rr.created_at) as last_roll_at
+    from public.room_rolls rr
+    group by upper(rr.room_code)
+  )
+  select
+    rc.room_code,
+    coalesce(ms.active_members, 0) as active_members,
+    greatest(
+      coalesce(ms.last_seen_at, to_timestamp(0)),
+      coalesce(rs.last_roll_at, to_timestamp(0))
+    ) as last_activity_at
+  from room_codes rc
+  left join member_stats ms on ms.room_code = rc.room_code
+  left join roll_stats rs on rs.room_code = rc.room_code
+  order by last_activity_at desc, rc.room_code asc
+  limit least(greatest(coalesce(max_rows, 100), 1), 200);
+$$;
+
+revoke all on function public.list_rooms(integer) from public;
+grant execute on function public.list_rooms(integer) to authenticated;
+
 drop policy if exists room_members_select_same_room on public.room_members;
 create policy room_members_select_same_room on public.room_members
 for select

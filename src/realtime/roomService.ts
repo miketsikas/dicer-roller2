@@ -51,6 +51,18 @@ export interface RoomSubscriptionHandlers {
   onPresenceEvent: (event: RoomPresenceEvent) => void;
 }
 
+interface RoomDirectoryRow {
+  room_code: string;
+  active_members: number;
+  last_activity_at: string | null;
+}
+
+export interface AvailableRoom {
+  roomCode: string;
+  activeMembers: number;
+  lastActivityAt: string | null;
+}
+
 function requireClient(): SupabaseClient {
   const client = getSupabaseClient();
   if (!client) {
@@ -129,6 +141,25 @@ export async function removeRoomMembership(roomCode: string): Promise<void> {
   if (error) {
     throw new Error(error.message);
   }
+}
+
+export async function fetchAvailableRooms(limit = 50): Promise<AvailableRoom[]> {
+  const client = requireClient();
+  await ensureAnonymousUser();
+
+  const { data, error } = await client.rpc('list_rooms', {
+    max_rows: Math.max(1, Math.min(limit, 200))
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data as RoomDirectoryRow[] | null) ?? []).map((row) => ({
+    roomCode: row.room_code,
+    activeMembers: row.active_members ?? 0,
+    lastActivityAt: row.last_activity_at
+  }));
 }
 
 export async function fetchRoomRollPage(args: {

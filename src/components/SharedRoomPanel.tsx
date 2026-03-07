@@ -1,4 +1,4 @@
-import type { RoomPresenceEvent, RoomPresenceMember } from '../realtime/roomService';
+import type { AvailableRoom, RoomPresenceEvent, RoomPresenceMember } from '../realtime/roomService';
 
 interface SharedRoomPanelProps {
   roomCode: string;
@@ -8,7 +8,11 @@ interface SharedRoomPanelProps {
   connecting: boolean;
   members: RoomPresenceMember[];
   recentPresenceEvents: RoomPresenceEvent[];
+  availableRooms: AvailableRoom[];
+  loadingRooms: boolean;
   onRoomCodeChange: (value: string) => void;
+  onSelectExistingRoom: (roomCode: string) => void;
+  onRefreshRooms: () => void;
   onJoin: () => void;
   onLeave: () => void;
 }
@@ -21,7 +25,11 @@ export function SharedRoomPanel({
   connecting,
   members,
   recentPresenceEvents,
+  availableRooms,
+  loadingRooms,
   onRoomCodeChange,
+  onSelectExistingRoom,
+  onRefreshRooms,
   onJoin,
   onLeave
 }: SharedRoomPanelProps): JSX.Element {
@@ -46,6 +54,31 @@ export function SharedRoomPanel({
         </button>
         <button type="button" onClick={onLeave} disabled={!isConnected || connecting}>
           Leave Room
+        </button>
+      </div>
+
+      <label htmlFor="room-picker">Existing Rooms</label>
+      <div className="row wrap gap-sm">
+        <select
+          id="room-picker"
+          value=""
+          onChange={(event) => {
+            const selected = event.target.value;
+            if (selected) {
+              onSelectExistingRoom(selected);
+            }
+          }}
+          disabled={!realtimeReady || connecting || loadingRooms || availableRooms.length === 0}
+        >
+          <option value="">Select a room to join...</option>
+          {availableRooms.map((room) => (
+            <option key={room.roomCode} value={room.roomCode}>
+              {room.roomCode} ({room.activeMembers} online)
+            </option>
+          ))}
+        </select>
+        <button type="button" onClick={onRefreshRooms} disabled={!realtimeReady || loadingRooms || connecting}>
+          {loadingRooms ? 'Refreshing...' : 'Refresh Rooms'}
         </button>
       </div>
 
