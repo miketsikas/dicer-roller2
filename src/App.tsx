@@ -582,6 +582,74 @@ export default function App(): JSX.Element {
   };
 
   const canPaginateRoomHistory = !activeReplayId && !!connectedRoomCode;
+  const connectedMode = Boolean(connectedRoomCode);
+
+  const renderPresetsPanel = (className?: string): JSX.Element => (
+    <PresetsPanel
+      className={className}
+      presets={data.presets}
+      onCreate={(name) => {
+        clearMessages();
+        try {
+          commit((previous) => ({
+            ...previous,
+            presets: createPreset(previous.presets, {
+              name,
+              counts,
+              formula,
+              secret: secretRoll
+            })
+          }));
+          setStatusMessage('Preset created.');
+        } catch (presetError) {
+          setLocalError((presetError as Error).message);
+        }
+      }}
+      onRename={(presetId, name) => {
+        clearMessages();
+        try {
+          commit((previous) => ({
+            ...previous,
+            presets: renamePreset(previous.presets, presetId, name)
+          }));
+          setStatusMessage('Preset renamed.');
+        } catch (renameError) {
+          setLocalError((renameError as Error).message);
+        }
+      }}
+      onUpdate={(presetId) => {
+        clearMessages();
+        commit((previous) => ({
+          ...previous,
+          presets: updatePresetFromDraft(previous.presets, presetId, {
+            counts,
+            formula,
+            secret: secretRoll
+          })
+        }));
+        setStatusMessage('Preset updated from current setup.');
+      }}
+      onDelete={(presetId) => {
+        commit((previous) => ({
+          ...previous,
+          presets: deletePreset(previous.presets, presetId)
+        }));
+        setStatusMessage('Preset deleted.');
+      }}
+      onApply={(presetId) => {
+        clearMessages();
+        try {
+          const preset = applyPreset(data.presets, presetId);
+          setCounts({ ...preset.counts });
+          setFormula(preset.formula);
+          setSecretRoll(preset.secret);
+          setStatusMessage(`Preset "${preset.name}" applied.`);
+        } catch (applyError) {
+          setLocalError((applyError as Error).message);
+        }
+      }}
+    />
+  );
 
   return (
     <main className="app-shell" style={{ backgroundImage: currentBackground.image }}>
@@ -647,8 +715,10 @@ export default function App(): JSX.Element {
           </div>
         </section>
 
-        <div className="layout-grid">
-          <div className="column">
+        <div className={`layout-grid ${connectedMode ? 'layout-grid-connected' : ''}`}>
+          <div className="column sidebar-column">
+            {connectedMode ? renderPresetsPanel('presets-emphasis sidebar-presets-top') : null}
+
             <RoomProfilePanel
               playerAlias={data.preferences.playerAlias}
               roomName={data.preferences.roomName}
@@ -783,69 +853,7 @@ export default function App(): JSX.Element {
               }
             />
 
-            <PresetsPanel
-              presets={data.presets}
-              onCreate={(name) => {
-                clearMessages();
-                try {
-                  commit((previous) => ({
-                    ...previous,
-                    presets: createPreset(previous.presets, {
-                      name,
-                      counts,
-                      formula,
-                      secret: secretRoll
-                    })
-                  }));
-                  setStatusMessage('Preset created.');
-                } catch (presetError) {
-                  setLocalError((presetError as Error).message);
-                }
-              }}
-              onRename={(presetId, name) => {
-                clearMessages();
-                try {
-                  commit((previous) => ({
-                    ...previous,
-                    presets: renamePreset(previous.presets, presetId, name)
-                  }));
-                  setStatusMessage('Preset renamed.');
-                } catch (renameError) {
-                  setLocalError((renameError as Error).message);
-                }
-              }}
-              onUpdate={(presetId) => {
-                clearMessages();
-                commit((previous) => ({
-                  ...previous,
-                  presets: updatePresetFromDraft(previous.presets, presetId, {
-                    counts,
-                    formula,
-                    secret: secretRoll
-                  })
-                }));
-                setStatusMessage('Preset updated from current setup.');
-              }}
-              onDelete={(presetId) => {
-                commit((previous) => ({
-                  ...previous,
-                  presets: deletePreset(previous.presets, presetId)
-                }));
-                setStatusMessage('Preset deleted.');
-              }}
-              onApply={(presetId) => {
-                clearMessages();
-                try {
-                  const preset = applyPreset(data.presets, presetId);
-                  setCounts({ ...preset.counts });
-                  setFormula(preset.formula);
-                  setSecretRoll(preset.secret);
-                  setStatusMessage(`Preset "${preset.name}" applied.`);
-                } catch (applyError) {
-                  setLocalError((applyError as Error).message);
-                }
-              }}
-            />
+            {!connectedMode ? renderPresetsPanel() : null}
 
             <ModerationPanel
               moderation={data.moderation}
@@ -888,39 +896,41 @@ export default function App(): JSX.Element {
             />
           </div>
 
-          <div className="column">
-            <QuickActions
-              onRollPublicD20={() => runRoll({ source: 'quick', forcedFormula: '1d20', forcedSecret: false, note: 'Quick 1d20' })}
-              onRollSecretD20={() => runRoll({ source: 'quick', forcedFormula: '1d20', forcedSecret: true, note: 'Quick secret 1d20' })}
+          <div className="column rolling-column">
+            <section className={`rolling-spotlight ${connectedMode ? 'connected' : ''}`}>
+              <QuickActions
+                onRollPublicD20={() => runRoll({ source: 'quick', forcedFormula: '1d20', forcedSecret: false, note: 'Quick 1d20' })}
+                onRollSecretD20={() => runRoll({ source: 'quick', forcedFormula: '1d20', forcedSecret: true, note: 'Quick secret 1d20' })}
               onRollRandomBatch={() => {
                 const template = rollRandomBatchTemplate(createRng(data.preferences.rngMode));
                 runRoll({ source: 'quick', forcedCounts: template, forcedFormula: '', note: 'Random batch' });
               }}
             />
 
-            <RollComposer
-              counts={counts}
-              formula={formula}
-              secretRoll={secretRoll}
-              onCountChange={(sides, value) => {
-                setCounts((previous) => ({
-                  ...previous,
-                  [sides]: sanitizePositiveInt(value, 99)
-                }));
-              }}
-              onFormulaChange={(value) => {
-                setFormula(value);
-              }}
-              onSecretRollChange={(value) => setSecretRoll(value)}
-              onRoll={() => runRoll({ source: formula.trim() ? 'formula' : 'manual' })}
-              onReset={() => {
-                setCounts(createEmptyCounts());
-                setFormula('');
-                setSecretRoll(data.preferences.defaultSecret);
-                setStatusMessage('Inputs reset.');
-                setLocalError(null);
-              }}
-            />
+              <RollComposer
+                counts={counts}
+                formula={formula}
+                secretRoll={secretRoll}
+                onCountChange={(sides, value) => {
+                  setCounts((previous) => ({
+                    ...previous,
+                    [sides]: sanitizePositiveInt(value, 99)
+                  }));
+                }}
+                onFormulaChange={(value) => {
+                  setFormula(value);
+                }}
+                onSecretRollChange={(value) => setSecretRoll(value)}
+                onRoll={() => runRoll({ source: formula.trim() ? 'formula' : 'manual' })}
+                onReset={() => {
+                  setCounts(createEmptyCounts());
+                  setFormula('');
+                  setSecretRoll(data.preferences.defaultSecret);
+                  setStatusMessage('Inputs reset.');
+                  setLocalError(null);
+                }}
+              />
+            </section>
 
             <HistoryFeed
               items={feedItems}
