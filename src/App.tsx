@@ -12,7 +12,7 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import { BackgroundWidget } from './components/BackgroundWidget';
-import { HistoryFeed } from './components/HistoryFeed';
+import { HistoryFeed, type HistoryFilters } from './components/HistoryFeed';
 import { Modal } from './components/Modal';
 import { ModifierToolkitPanel } from './components/ModifierToolkitPanel';
 import { PlayerRoomPanel } from './components/PlayerRoomPanel';
@@ -42,10 +42,19 @@ import {
   type RoomPresenceMember
 } from './realtime/roomService';
 import { getSupabaseClient, isRealtimeConfigured } from './realtime/supabaseClient';
-import type { CharacterModifiers, DiceCounts, RollEntry, SaveKey, StatKey, WorkspaceLayout } from './types';
+import { DICE_SIDES, type CharacterModifiers, type DiceCounts, type RollEntry, type SaveKey, type StatKey, type WorkspaceLayout } from './types';
 
 const PAGE_SIZE = 100;
 const ROOM_SYNC_INTERVAL_MS = 8_000;
+const RESULT_EMPHASIS_MS = 1_350;
+
+const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
+  searchText: '',
+  mineOnly: false,
+  showPublic: true,
+  showSecret: true,
+  formulaOnly: false
+};
 
 const WINDOW_IDS = ['presets', 'quickActions', 'rollComposer', 'history'] as const;
 const WINDOW_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
@@ -54,10 +63,42 @@ const WINDOW_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
   rollComposer: 'Dice Roller',
   history: 'Roll History'
 };
+const MOBILE_NAV_WINDOW_ORDER: readonly (typeof WINDOW_IDS)[number][] = ['history', 'rollComposer', 'quickActions', 'presets'];
+const MOBILE_NAV_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
+  history: 'History',
+  rollComposer: 'Roll',
+  quickActions: 'Quick',
+  presets: 'Preset'
+};
+const MOBILE_VIEW_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
+  history: 'Roll History',
+  rollComposer: 'Dice Roller',
+  quickActions: 'Quick Actions',
+  presets: 'Saved Presets'
+};
 
 type WorkspaceWindowId = (typeof WINDOW_IDS)[number];
 type WorkspaceColumn = 'left' | 'right';
 type WindowDensity = 'regular' | 'compact' | 'tiny';
+type RollHighlightKind = 'nat20' | 'nat1' | 'critical';
+
+interface GuideStep {
+  id: string;
+  title: string;
+  description: string;
+  target: () => HTMLElement | null;
+  onEnter?: () => void;
+}
+
+interface RecentRollAction {
+  id: string;
+  label: string;
+  detail: string;
+  source: RollEntry['source'];
+  forcedFormula?: string;
+  forcedCounts?: DiceCounts;
+  forcedSecret: boolean;
+}
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   locked: true,
@@ -296,6 +337,111 @@ function appendModifierToken(formula: string, key: ModifierRefKey, modifiers: Ch
   return `${trimmed}+${token}`;
 }
 
+function isKnownDieSides(value: number): value is (typeof DICE_SIDES)[number] {
+  return (DICE_SIDES as readonly number[]).includes(value);
+}
+
+function countsFromPools(pools: RollEntry['dicePools']): DiceCounts {
+  const counts = createEmptyCounts();
+  for (const pool of pools) {
+    if (!isKnownDieSides(pool.sides)) {
+      continue;
+    }
+    counts[pool.sides] += pool.values.length;
+  }
+  return counts;
+}
+
+function deriveRecentRollActions(entries: RollEntry[], limit = 6): RecentRollAction[] {
+  const actions: RecentRollAction[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.formula) {
+      const normalized = entry.formula.trim();
+      const key = `formula|${normalized}|${entry.secret ? 'secret' : 'public'}`;
+      if (!normalized || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      actions.push({
+        id: key,
+        label: normalized,
+        detail: `${entry.secret ? 'Secret' : 'Public'} formula`,
+        source: entry.source,
+        forcedFormula: normalized,
+        forcedSecret: entry.secret
+      });
+    } else {
+      const counts = countsFromPools(entry.dicePools);
+      const countsLabel = buildCountsLabel(counts);
+      if (!countsLabel) {
+        continue;
+      }
+      const key = `counts|${countsLabel}|${entry.secret ? 'secret' : 'public'}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      actions.push({
+        id: key,
+        label: countsLabel,
+        detail: `${entry.secret ? 'Secret' : 'Public'} dice`,
+        source: entry.source,
+        forcedCounts: counts,
+        forcedFormula: '',
+        forcedSecret: entry.secret
+      });
+    }
+
+    if (actions.length >= limit) {
+      break;
+    }
+  }
+
+  return actions;
+}
+
+function rollHighlight(entry: RollEntry): RollHighlightKind | null {
+  let hasNat20 = false;
+  let hasNat1 = false;
+  let hasCritical = false;
+
+  for (const pool of entry.dicePools) {
+    const values = pool.keptValues && pool.keptValues.length > 0 ? pool.keptValues : pool.values;
+    if (values.length === 0) {
+      continue;
+    }
+
+    if (pool.sides === 20) {
+      if (values.includes(20)) {
+        hasNat20 = true;
+      }
+      if (values.includes(1)) {
+        hasNat1 = true;
+      }
+    }
+
+    const maxHits = values.filter((value) => value === pool.sides).length;
+    if (pool.sides >= 10 && values.length >= 2 && maxHits >= 2) {
+      hasCritical = true;
+    }
+  }
+
+  if (hasCritical) {
+    return 'critical';
+  }
+  if (hasNat20) {
+    return 'nat20';
+  }
+  if (hasNat1) {
+    return 'nat1';
+  }
+  return null;
+}
+
 export default function App(): JSX.Element {
   const { data, loading, error, storageKind, commit } = useAppData();
   const realtimeReady = isRealtimeConfigured();
@@ -324,6 +470,19 @@ export default function App(): JSX.Element {
   const [availableRooms, setAvailableRooms] = useState<AvailableRoom[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(false);
   const [presenceMembers, setPresenceMembers] = useState<RoomPresenceMember[]>([]);
+  const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(DEFAULT_HISTORY_FILTERS);
+
+  const [showHeroMenu, setShowHeroMenu] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const [guideStepIndex, setGuideStepIndex] = useState(0);
+  const [guideTargetRect, setGuideTargetRect] = useState<DOMRect | null>(null);
+
+  const [resultHighlight, setResultHighlight] = useState<RollHighlightKind | null>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileActiveWindow, setMobileActiveWindow] = useState<WorkspaceWindowId>('history');
+  const [mobilePanelHeight, setMobilePanelHeight] = useState<number | null>(null);
 
   const [draggingWindowId, setDraggingWindowId] = useState<WorkspaceWindowId | null>(null);
   const [dragTarget, setDragTarget] = useState<{ column: WorkspaceColumn; index: number } | null>(null);
@@ -337,6 +496,8 @@ export default function App(): JSX.Element {
   });
 
   const initializedRef = useRef(false);
+  const resultHighlightTimerRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const resizeSessionRef = useRef<{
     windowId: WorkspaceWindowId;
@@ -355,6 +516,22 @@ export default function App(): JSX.Element {
   const columnRefs = useRef<Record<WorkspaceColumn, HTMLDivElement | null>>({
     left: null,
     right: null
+  });
+  const workspaceGridRef = useRef<HTMLDivElement | null>(null);
+  const mobileBottomStackRef = useRef<HTMLDivElement | null>(null);
+  const heroMenuRef = useRef<HTMLDivElement | null>(null);
+  const roomButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileNavButtonRefs = useRef<Record<WorkspaceWindowId, HTMLButtonElement | null>>({
+    history: null,
+    rollComposer: null,
+    quickActions: null,
+    presets: null
+  });
+  const panelGuideRefs = useRef<Record<WorkspaceWindowId, HTMLDivElement | null>>({
+    history: null,
+    rollComposer: null,
+    quickActions: null,
+    presets: null
   });
 
   const clearMessages = useCallback((): void => {
@@ -551,12 +728,157 @@ export default function App(): JSX.Element {
   }, [connectedRoomCode]);
 
   useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setPrefersReducedMotion(media.matches);
+
+    const onChange = (event: MediaQueryListEvent): void => {
+      setPrefersReducedMotion(event.matches);
+    };
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 779px)');
+    setIsMobileViewport(media.matches);
+
+    const onChange = (event: MediaQueryListEvent): void => {
+      setIsMobileViewport(event.matches);
+    };
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setMobilePanelHeight(null);
+      return;
+    }
+
+    let frameId = 0;
+    const scheduleUpdate = (): void => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        const gridElement = workspaceGridRef.current;
+        if (!gridElement) {
+          return;
+        }
+
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const gridTop = gridElement.getBoundingClientRect().top;
+        const bottomStackHeight = mobileBottomStackRef.current?.getBoundingClientRect().height ?? 0;
+        const nextHeight = Math.max(260, Math.floor(viewportHeight - gridTop - bottomStackHeight - 12));
+        setMobilePanelHeight((previous) => (previous === nextHeight ? previous : nextHeight));
+      });
+    };
+
+    scheduleUpdate();
+
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => scheduleUpdate());
+    const contentElement = workspaceGridRef.current?.parentElement;
+    if (observer) {
+      if (contentElement) {
+        observer.observe(contentElement);
+      }
+      if (mobileBottomStackRef.current) {
+        observer.observe(mobileBottomStackRef.current);
+      }
+    }
+
+    window.addEventListener('resize', scheduleUpdate);
+    window.addEventListener('orientationchange', scheduleUpdate);
+    window.visualViewport?.addEventListener('resize', scheduleUpdate);
+    window.visualViewport?.addEventListener('scroll', scheduleUpdate);
+
+    return () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('orientationchange', scheduleUpdate);
+      window.visualViewport?.removeEventListener('resize', scheduleUpdate);
+      window.visualViewport?.removeEventListener('scroll', scheduleUpdate);
+    };
+  }, [error, isMobileViewport, localError, showLayoutModal, statusMessage]);
+
+  useEffect(() => {
+    if (!isMobileViewport || !showLayoutModal) {
+      return;
+    }
+    setShowLayoutModal(false);
+  }, [isMobileViewport, showLayoutModal]);
+
+  useEffect(() => {
+    if (!showHeroMenu) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null;
+      if (target && heroMenuRef.current?.contains(target)) {
+        return;
+      }
+      setShowHeroMenu(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setShowHeroMenu(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showHeroMenu]);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setStatusMessage(null);
+    }, 3200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [statusMessage]);
+
+  useEffect(() => {
     if (!data || initializedRef.current) {
       return;
     }
 
     initializedRef.current = true;
     setSecretRoll(data.preferences.defaultSecret);
+
+    if (!data.preferences.guidedSetupCompleted) {
+      setShowGuide(true);
+      setGuideStepIndex(0);
+    }
 
     const share = parseShareParams(window.location.search);
     const sharedRoomCode = share.roomCode ? normalizeRoomCode(share.roomCode) : '';
@@ -583,6 +905,18 @@ export default function App(): JSX.Element {
       setPendingAutoJoinCode(normalizeRoomCode(data.preferences.roomCode));
     }
   }, [commit, data]);
+
+  useEffect(() => {
+    return () => {
+      if (resultHighlightTimerRef.current !== null) {
+        window.clearTimeout(resultHighlightTimerRef.current);
+      }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!realtimeReady) {
@@ -689,24 +1023,232 @@ export default function App(): JSX.Element {
   }, [data?.preferences.backgroundId]);
 
   const visibleEntries = useMemo(() => (connectedRoomCode ? roomEntries : data?.rollHistory ?? []), [connectedRoomCode, data?.rollHistory, roomEntries]);
+  const currentAliasKey = useMemo(() => normalizeAlias(data?.preferences.playerAlias ?? '').toLowerCase(), [data?.preferences.playerAlias]);
+  const filteredEntries = useMemo(() => {
+    const query = historyFilters.searchText.trim().toLowerCase();
+
+    return visibleEntries.filter((entry) => {
+      const aliasKey = entry.playerAlias.trim().toLowerCase();
+      if (historyFilters.mineOnly && aliasKey !== currentAliasKey) {
+        return false;
+      }
+      if (entry.secret && !historyFilters.showSecret) {
+        return false;
+      }
+      if (!entry.secret && !historyFilters.showPublic) {
+        return false;
+      }
+      if (historyFilters.formulaOnly && !entry.formula) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+
+      const formulaLabel = entry.formula ?? '';
+      return aliasKey.includes(query) || formulaLabel.toLowerCase().includes(query);
+    });
+  }, [currentAliasKey, historyFilters, visibleEntries]);
 
   const feedItems = useMemo(() => {
     if (!data) {
       return [];
     }
-    return groupFeedEntries(visibleEntries, data.moderation.spamWindowMs);
-  }, [data, visibleEntries]);
+    return groupFeedEntries(filteredEntries, data.moderation.spamWindowMs);
+  }, [data, filteredEntries]);
 
   const joinableRooms = useMemo(() => availableRooms.filter((room) => room.roomCode !== connectedRoomCode), [availableRooms, connectedRoomCode]);
+  const favoritePresets = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+    const presetMap = new Map(data.presets.map((preset) => [preset.id, preset]));
+    const orderedFavorites = data.preferences.favoritePresetIds
+      .map((presetId) => presetMap.get(presetId))
+      .filter((preset): preset is NonNullable<typeof preset> => !!preset);
+    return orderedFavorites;
+  }, [data]);
+  const recentRollActions = useMemo(() => deriveRecentRollActions(data?.rollHistory ?? []), [data?.rollHistory]);
+  const recentActionMap = useMemo(() => new Map(recentRollActions.map((action) => [action.id, action])), [recentRollActions]);
+  const reduceMotionEnabled = useMemo(
+    () => Boolean(data?.preferences.reduceMotion) || prefersReducedMotion,
+    [data?.preferences.reduceMotion, prefersReducedMotion]
+  );
+
+  useEffect(() => {
+    document.body.classList.toggle('reduce-motion', reduceMotionEnabled);
+    return () => {
+      document.body.classList.remove('reduce-motion');
+    };
+  }, [reduceMotionEnabled]);
+
+  const setResultFxEnabled = useCallback(
+    (value: boolean): void => {
+      commit((previous) => ({
+        ...previous,
+        preferences: {
+          ...previous.preferences,
+          resultFxEnabled: value
+        }
+      }));
+    },
+    [commit]
+  );
+
+  const setResultFxSound = useCallback(
+    (value: boolean): void => {
+      commit((previous) => ({
+        ...previous,
+        preferences: {
+          ...previous.preferences,
+          resultFxSound: value
+        }
+      }));
+    },
+    [commit]
+  );
+
+  const setResultFxHaptics = useCallback(
+    (value: boolean): void => {
+      commit((previous) => ({
+        ...previous,
+        preferences: {
+          ...previous.preferences,
+          resultFxHaptics: value
+        }
+      }));
+    },
+    [commit]
+  );
+
+  const setReduceMotionPreference = useCallback(
+    (value: boolean): void => {
+      commit((previous) => ({
+        ...previous,
+        preferences: {
+          ...previous.preferences,
+          reduceMotion: value
+        }
+      }));
+    },
+    [commit]
+  );
+
+  const guideSteps = useMemo<GuideStep[]>(() => {
+    if (isMobileViewport) {
+      return [
+        {
+          id: 'room',
+          title: 'Set Your Player',
+          description: 'Tap the highlighted button to set alias and join a room.',
+          target: () => roomButtonRef.current
+        },
+        {
+          id: 'roll-nav',
+          title: 'Open Roll',
+          description: 'Tap this tab to open the Roll panel.',
+          target: () => mobileNavButtonRefs.current.rollComposer,
+          onEnter: () => setMobileActiveWindow('history')
+        },
+        {
+          id: 'preset-nav',
+          title: 'Open Presets',
+          description: 'Tap this tab to reach your saved combinations.',
+          target: () => mobileNavButtonRefs.current.presets,
+          onEnter: () => setMobileActiveWindow('rollComposer')
+        },
+        {
+          id: 'history-nav',
+          title: 'Review History',
+          description: 'Tap this tab to return to roll history and filters.',
+          target: () => mobileNavButtonRefs.current.history,
+          onEnter: () => setMobileActiveWindow('presets')
+        }
+      ];
+    }
+
+    return [
+      {
+        id: 'room',
+        title: 'Set Your Player',
+        description: 'Click here first to set alias and join a room.',
+        target: () => roomButtonRef.current
+      },
+      {
+        id: 'roll-panel',
+        title: 'Roll Dice',
+        description: 'This panel is where you roll counts or formulas.',
+        target: () => panelGuideRefs.current.rollComposer
+      },
+      {
+        id: 'preset-panel',
+        title: 'Use Presets',
+        description: 'Save and reuse combinations from this panel.',
+        target: () => panelGuideRefs.current.presets
+      },
+      {
+        id: 'history-panel',
+        title: 'Track Results',
+        description: 'This panel shows roll history with filters and search.',
+        target: () => panelGuideRefs.current.history
+      }
+    ];
+  }, [isMobileViewport]);
+
+  const activeGuideStep = showGuide ? guideSteps[guideStepIndex] ?? null : null;
+
+  useEffect(() => {
+    if (!showGuide || !activeGuideStep) {
+      return;
+    }
+    activeGuideStep.onEnter?.();
+  }, [activeGuideStep, showGuide]);
+
+  useEffect(() => {
+    if (!showGuide || !activeGuideStep) {
+      setGuideTargetRect(null);
+      return;
+    }
+
+    const updateRect = (): void => {
+      const element = activeGuideStep.target();
+      if (!element) {
+        setGuideTargetRect(null);
+        return;
+      }
+      setGuideTargetRect(element.getBoundingClientRect());
+    };
+
+    const element = activeGuideStep.target();
+    if (element) {
+      element.scrollIntoView({
+        behavior: reduceMotionEnabled ? 'auto' : 'smooth',
+        block: 'center',
+        inline: 'nearest'
+      });
+    }
+    updateRect();
+
+    const interval = window.setInterval(updateRect, 120);
+    window.addEventListener('resize', updateRect);
+    window.addEventListener('scroll', updateRect, true);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('resize', updateRect);
+      window.removeEventListener('scroll', updateRect, true);
+    };
+  }, [activeGuideStep, reduceMotionEnabled, showGuide]);
 
   const workspaceLayout = useMemo(() => normalizeWorkspaceLayout(data?.workspaceLayout), [data?.workspaceLayout]);
   const workspaceGridStyle = useMemo(
     () =>
       ({
         '--workspace-left': `${workspaceLayout.columnSplit ?? 45}%`,
-        '--workspace-right': `${100 - (workspaceLayout.columnSplit ?? 45)}%`
+        '--workspace-right': `${100 - (workspaceLayout.columnSplit ?? 45)}%`,
+        '--mobile-panel-height': mobilePanelHeight ? `${mobilePanelHeight}px` : 'auto'
       }) as CSSProperties,
-    [workspaceLayout.columnSplit]
+    [mobilePanelHeight, workspaceLayout.columnSplit]
   );
   const selectedWindowColumn = useMemo(() => {
     if (!selectedWindowId) {
@@ -761,6 +1303,133 @@ export default function App(): JSX.Element {
       setPresetOptionsError(null);
     }
   }, [data, presetOptionsId]);
+
+  const markGuidedSetupCompleted = useCallback((): void => {
+    if (!data || data.preferences.guidedSetupCompleted) {
+      return;
+    }
+    commit((previous) => ({
+      ...previous,
+      preferences: {
+        ...previous.preferences,
+        guidedSetupCompleted: true
+      }
+    }));
+  }, [commit, data]);
+
+  const completeGuide = useCallback((): void => {
+    setShowGuide(false);
+    setGuideStepIndex(0);
+    setGuideTargetRect(null);
+    markGuidedSetupCompleted();
+  }, [markGuidedSetupCompleted]);
+
+  const closeGuide = useCallback((): void => {
+    setShowGuide(false);
+    setGuideStepIndex(0);
+    setGuideTargetRect(null);
+  }, []);
+
+  useEffect(() => {
+    if (!showGuide || !activeGuideStep) {
+      return;
+    }
+
+    const onClickCapture = (event: MouseEvent): void => {
+      const targetElement = activeGuideStep.target();
+      if (!targetElement) {
+        return;
+      }
+      const clicked = event.target as Node | null;
+      if (!clicked || !targetElement.contains(clicked)) {
+        return;
+      }
+
+      if (guideStepIndex >= guideSteps.length - 1) {
+        completeGuide();
+        return;
+      }
+
+      setGuideStepIndex(guideStepIndex + 1);
+    };
+
+    window.addEventListener('click', onClickCapture, true);
+    return () => window.removeEventListener('click', onClickCapture, true);
+  }, [activeGuideStep, completeGuide, guideStepIndex, guideSteps.length, showGuide]);
+
+  const playFeedbackTone = useCallback(
+    (kind: RollHighlightKind): void => {
+      if (!data || !data.preferences.resultFxSound || !data.preferences.resultFxEnabled) {
+        return;
+      }
+
+      const AudioCtor = (
+        window.AudioContext ??
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      );
+      if (!AudioCtor) {
+        return;
+      }
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioCtor();
+      }
+
+      const context = audioContextRef.current;
+      if (!context) {
+        return;
+      }
+
+      if (context.state === 'suspended') {
+        void context.resume();
+      }
+
+      const now = context.currentTime;
+      const gainNode = context.createGain();
+      const oscillator = context.createOscillator();
+
+      oscillator.type = kind === 'nat1' ? 'sawtooth' : 'triangle';
+      oscillator.frequency.value = kind === 'nat20' ? 880 : kind === 'critical' ? 1040 : 220;
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.19);
+    },
+    [data]
+  );
+
+  const triggerResultFeedback = useCallback(
+    (entry: RollEntry): void => {
+      if (!data || !data.preferences.resultFxEnabled) {
+        return;
+      }
+
+      const highlight = rollHighlight(entry);
+      if (!highlight) {
+        return;
+      }
+
+      setResultHighlight(highlight);
+      if (resultHighlightTimerRef.current !== null) {
+        window.clearTimeout(resultHighlightTimerRef.current);
+      }
+      resultHighlightTimerRef.current = window.setTimeout(() => {
+        setResultHighlight(null);
+      }, RESULT_EMPHASIS_MS);
+
+      playFeedbackTone(highlight);
+
+      if (data.preferences.resultFxHaptics && 'vibrate' in navigator) {
+        const pattern = highlight === 'critical' ? [20, 40, 20] : highlight === 'nat20' ? [30] : [12, 20, 12];
+        navigator.vibrate(pattern);
+      }
+    },
+    [data, playFeedbackTone]
+  );
 
   const runRoll = (options: {
     source: RollEntry['source'];
@@ -852,6 +1521,8 @@ export default function App(): JSX.Element {
       ...previous,
       rollHistory: [entry, ...previous.rollHistory]
     }));
+    markGuidedSetupCompleted();
+    triggerResultFeedback(entry);
 
     if (connectedRoomCode) {
       void (async () => {
@@ -878,6 +1549,97 @@ export default function App(): JSX.Element {
 
     setStatusMessage(connectedRoomCode ? 'Roll published to shared room.' : 'Roll recorded locally.');
   };
+
+  const applyPresetById = useCallback(
+    (presetId: string, silent = false): boolean => {
+      if (!data) {
+        return false;
+      }
+
+      clearMessages();
+      try {
+        const preset = applyPreset(data.presets, presetId);
+        setCounts({ ...preset.counts });
+        setFormula(preset.formula);
+        setSecretRoll(preset.secret);
+        if (!silent) {
+          setStatusMessage(`Preset "${preset.name}" applied.`);
+        }
+        return true;
+      } catch (applyError) {
+        setLocalError((applyError as Error).message);
+        return false;
+      }
+    },
+    [clearMessages, data]
+  );
+
+  const toggleFavoritePreset = useCallback(
+    (presetId: string): void => {
+      commit((previous) => {
+        const exists = previous.preferences.favoritePresetIds.includes(presetId);
+        const nextFavorites = exists
+          ? previous.preferences.favoritePresetIds.filter((id) => id !== presetId)
+          : [presetId, ...previous.preferences.favoritePresetIds.filter((id) => id !== presetId)].slice(0, 8);
+        return {
+          ...previous,
+          preferences: {
+            ...previous.preferences,
+            favoritePresetIds: nextFavorites
+          }
+        };
+      });
+      setStatusMessage('Preset favorites updated.');
+      setLocalError(null);
+    },
+    [commit]
+  );
+
+  const runRecentAction = useCallback(
+    (actionId: string): void => {
+      const action = recentActionMap.get(actionId);
+      if (!action) {
+        setLocalError('Recent action is no longer available.');
+        return;
+      }
+      runRoll({
+        source: action.source,
+        useFormula: Boolean(action.forcedFormula),
+        forcedFormula: action.forcedFormula,
+        forcedCounts: action.forcedCounts,
+        forcedSecret: action.forcedSecret,
+        note: `Recent: ${action.label}`
+      });
+    },
+    [recentActionMap, runRoll]
+  );
+
+  const runPresetInstantRoll = useCallback(
+    (presetId: string): void => {
+      if (!data) {
+        return;
+      }
+
+      clearMessages();
+      try {
+        const preset = applyPreset(data.presets, presetId);
+        setCounts({ ...preset.counts });
+        setFormula(preset.formula);
+        setSecretRoll(preset.secret);
+        runRoll({
+          source: preset.formula ? 'formula' : 'manual',
+          useFormula: Boolean(preset.formula),
+          forcedFormula: preset.formula,
+          forcedCounts: { ...preset.counts },
+          forcedSecret: preset.secret,
+          note: `Preset: ${preset.name}`
+        });
+      } catch (presetError) {
+        setLocalError((presetError as Error).message);
+      }
+    },
+    [clearMessages, data, runRoll]
+  );
 
   const insertFormulaModifier = useCallback((key: ModifierRefKey, label: string): void => {
     if (!data) {
@@ -1560,6 +2322,7 @@ export default function App(): JSX.Element {
       className={className}
       density={windowDensities.presets}
       presets={data.presets}
+      favoritePresetIds={data.preferences.favoritePresetIds}
       onCreate={(name) => {
         clearMessages();
         try {
@@ -1579,17 +2342,12 @@ export default function App(): JSX.Element {
       }}
       onOpenOptions={openPresetOptions}
       onApply={(presetId) => {
-        clearMessages();
-        try {
-          const preset = applyPreset(data.presets, presetId);
-          setCounts({ ...preset.counts });
-          setFormula(preset.formula);
-          setSecretRoll(preset.secret);
-          setStatusMessage(`Preset "${preset.name}" applied.`);
-        } catch (applyError) {
-          setLocalError((applyError as Error).message);
-        }
+        applyPresetById(presetId);
       }}
+      onRollFavorite={(presetId) => {
+        runPresetInstantRoll(presetId);
+      }}
+      onToggleFavorite={toggleFavoritePreset}
     />
   );
 
@@ -1729,64 +2487,269 @@ export default function App(): JSX.Element {
     />
   );
 
+  const favoritePresetButtons = favoritePresets.map((preset) => ({ id: preset.id, name: preset.name }));
+  const runQuickPublicD20 = (): void => {
+    runRoll({ source: 'quick', useFormula: true, forcedFormula: '1d20', forcedSecret: false, note: 'Quick 1d20' });
+  };
+  const runQuickSecretD20 = (): void => {
+    runRoll({ source: 'quick', useFormula: true, forcedFormula: '1d20', forcedSecret: true, note: 'Quick secret 1d20' });
+  };
+  const runQuickRandomBatch = (): void => {
+    const template = rollRandomBatchTemplate(createRng(data.preferences.rngMode));
+    runRoll({ source: 'quick', forcedCounts: template, forcedFormula: '', note: 'Random batch' });
+  };
+  const openSetupGuide = (): void => {
+    setGuideStepIndex(0);
+    setShowGuide(true);
+  };
+
   const windowContent: Record<WorkspaceWindowId, JSX.Element> = {
-    presets: renderPresetsPanel('presets-emphasis'),
-    quickActions: (
-      <QuickActions
-        density={windowDensities.quickActions}
-        onRollPublicD20={() => runRoll({ source: 'quick', useFormula: true, forcedFormula: '1d20', forcedSecret: false, note: 'Quick 1d20' })}
-        onRollSecretD20={() => runRoll({ source: 'quick', useFormula: true, forcedFormula: '1d20', forcedSecret: true, note: 'Quick secret 1d20' })}
-        onRollRandomBatch={() => {
-          const template = rollRandomBatchTemplate(createRng(data.preferences.rngMode));
-          runRoll({ source: 'quick', forcedCounts: template, forcedFormula: '', note: 'Random batch' });
+    presets: (
+      <div
+        ref={(element) => {
+          panelGuideRefs.current.presets = element;
         }}
-      />
+      >
+        {renderPresetsPanel('presets-emphasis')}
+      </div>
+    ),
+    quickActions: (
+      <div
+        ref={(element) => {
+          panelGuideRefs.current.quickActions = element;
+        }}
+      >
+        <QuickActions
+          density={windowDensities.quickActions}
+          onRollPublicD20={runQuickPublicD20}
+          onRollSecretD20={runQuickSecretD20}
+          onRollRandomBatch={runQuickRandomBatch}
+          favoritePresets={favoritePresetButtons}
+          recentRollActions={recentRollActions.map((action) => ({ id: action.id, label: action.label, detail: action.detail }))}
+          onRunFavoritePreset={(presetId) => {
+            runPresetInstantRoll(presetId);
+          }}
+          onRunRecentAction={runRecentAction}
+        />
+      </div>
     ),
     rollComposer: (
-      <RollComposer
-        density={windowDensities.rollComposer}
-        counts={counts}
-        formula={formula}
-        modifiers={data.characterModifiers}
-        secretRoll={secretRoll}
-        onCountChange={(sides, value) => {
-          setCounts((previous) => ({
-            ...previous,
-            [sides]: sanitizePositiveInt(value, 1000)
-          }));
+      <div
+        ref={(element) => {
+          panelGuideRefs.current.rollComposer = element;
         }}
-        onFormulaChange={(value) => {
-          setFormula(value);
-        }}
-        onInsertModifier={insertFormulaModifier}
-        onSecretRollChange={(value) => setSecretRoll(value)}
-        onRoll={() => runRoll({ source: 'manual', useFormula: false })}
-        onRollFormula={() => runRoll({ source: 'formula', useFormula: true })}
-        onReset={() => {
-          setCounts(createEmptyCounts());
-          setFormula('');
-          setSecretRoll(data.preferences.defaultSecret);
-          setStatusMessage('Inputs reset.');
-          setLocalError(null);
-        }}
-      />
+      >
+        <RollComposer
+          density={windowDensities.rollComposer}
+          counts={counts}
+          formula={formula}
+          modifiers={data.characterModifiers}
+          secretRoll={secretRoll}
+          onCountChange={(sides, value) => {
+            setCounts((previous) => ({
+              ...previous,
+              [sides]: sanitizePositiveInt(value, 1000)
+            }));
+          }}
+          onFormulaChange={(value) => {
+            setFormula(value);
+          }}
+          onInsertModifier={insertFormulaModifier}
+          onSecretRollChange={(value) => setSecretRoll(value)}
+          onRoll={() => runRoll({ source: 'manual', useFormula: false })}
+          onRollFormula={() => runRoll({ source: 'formula', useFormula: true })}
+          onReset={() => {
+            setCounts(createEmptyCounts());
+            setFormula('');
+            setSecretRoll(data.preferences.defaultSecret);
+            setStatusMessage('Inputs reset.');
+            setLocalError(null);
+          }}
+        />
+      </div>
     ),
     history: (
-      <HistoryFeed
-        density={windowDensities.history}
-        items={feedItems}
-        mutedAliases={[]}
-        hasMore={canPaginateRoomHistory && hasMoreRoomHistory}
-        loadingMore={loadingMoreHistory}
-        onLoadMore={() => {
-          void loadMoreRoomHistory();
+      <div
+        ref={(element) => {
+          panelGuideRefs.current.history = element;
         }}
-      />
+      >
+        <HistoryFeed
+          density={windowDensities.history}
+          items={feedItems}
+          filters={historyFilters}
+          activeAlias={currentAliasKey}
+          mutedAliases={[]}
+          hasMore={canPaginateRoomHistory && hasMoreRoomHistory}
+          loadingMore={loadingMoreHistory}
+          onFiltersChange={(next) => {
+            setHistoryFilters(next);
+          }}
+          onLoadMore={() => {
+            void loadMoreRoomHistory();
+          }}
+        />
+      </div>
     )
   };
 
-  const renderColumn = (column: WorkspaceColumn): JSX.Element => {
+  const renderColumn = (column: WorkspaceColumn): JSX.Element | null => {
     const orderedIds = (column === 'left' ? workspaceLayout.leftOrder : workspaceLayout.rightOrder).filter(isWorkspaceWindowId);
+    if (isMobileViewport) {
+      if (!orderedIds.includes(mobileActiveWindow)) {
+        return null;
+      }
+      const activeIds = [mobileActiveWindow];
+      return (
+        <div
+          ref={(element) => {
+            columnRefs.current[column] = element;
+          }}
+          className={`workspace-column ${dragTarget?.column === column ? 'drag-target-column' : ''}`}
+          data-column={column}
+          onDragOver={onColumnDragOver(column)}
+          onDrop={onColumnDrop(column)}
+          onDragLeave={onColumnDragLeave(column)}
+        >
+          {activeIds.map((windowId, index) => {
+            const height = clampWindowHeight(workspaceLayout.windowHeights?.[windowId] ?? 360);
+            const mobileHeight = mobilePanelHeight ?? height;
+            const density: WindowDensity = 'tiny';
+            const canEditWidth = workspaceLayout.windowsResizable && !workspaceLayout.sizesLocked;
+            return (
+              <div
+                ref={(element) => {
+                  windowCellRefs.current[windowId] = element;
+                }}
+                key={windowId}
+                className={`workspace-cell mobile-active-cell ${workspaceLayout.windowsResizable ? 'sizing-mode' : ''} ${selectedWindowId === windowId ? 'selected-cell' : ''}`}
+                style={
+                  {
+                    '--window-width': '100%',
+                    '--window-height': `${mobileHeight}px`
+                  } as CSSProperties
+                }
+                data-density={density}
+              >
+                <div
+                  className={`workspace-window window-${windowId} ${workspaceLayout.locked ? 'locked' : 'unlocked'} ${draggingWindowId === windowId ? 'dragging' : ''} ${selectedWindowId === windowId ? 'editing-active' : ''} ${resizingWindowId === windowId ? 'resizing' : ''}`}
+                  draggable={!workspaceLayout.locked}
+                  onDragStart={onWindowDragStart(windowId)}
+                  onDragEnd={onWindowDragEnd}
+                  onMouseDown={() => {
+                    setSelectedWindowId(windowId);
+                  }}
+                  onFocus={() => {
+                    setSelectedWindowId(windowId);
+                  }}
+                  tabIndex={workspaceLayout.locked ? undefined : 0}
+                  onKeyDown={onWindowKeyDown(column, windowId)}
+                  aria-label={`${windowId} window. Drag the window to move it, Alt+Arrow to reorder, Alt+M to move column.`}
+                >
+                  {!workspaceLayout.locked ? (
+                    <div className="window-handle">
+                      <span className="window-size-pill" aria-label={`${windowId} width 100% and height ${mobileHeight}px`}>
+                        100% x {mobileHeight}
+                      </span>
+
+                      <div className="window-handle-actions">
+                        <button
+                          type="button"
+                          className="window-handle-btn"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            nudgeWindow(column, windowId, 'backward');
+                          }}
+                          aria-label={`Move ${windowId} earlier`}
+                          title="Move earlier"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="window-handle-btn"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            nudgeWindow(column, windowId, 'forward');
+                          }}
+                          aria-label={`Move ${windowId} later`}
+                          title="Move later"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          className="window-handle-btn"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            moveWindowToOtherColumn(column, windowId);
+                          }}
+                          aria-label={`Move ${windowId} to ${column === 'left' ? 'right' : 'left'} column`}
+                          title="Move across columns"
+                        >
+                          ↔
+                        </button>
+
+                        {workspaceLayout.windowsResizable ? (
+                          <>
+                            <button
+                              type="button"
+                              className="window-handle-btn"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                adjustWindowWidth(windowId, -5);
+                              }}
+                              aria-label={`Decrease ${windowId} width`}
+                              disabled={!canEditWidth}
+                              title="Shrink width"
+                            >
+                              −
+                            </button>
+                            <button
+                              type="button"
+                              className="window-handle-btn"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                adjustWindowWidth(windowId, 5);
+                              }}
+                              aria-label={`Increase ${windowId} width`}
+                              disabled={!canEditWidth}
+                              title="Grow width"
+                            >
+                              +
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                  {windowContent[windowId]}
+                  {!workspaceLayout.locked && workspaceLayout.windowsResizable ? (
+                    <button
+                      type="button"
+                      className="window-corner-resizer"
+                      onPointerDown={onCornerResizeStart(windowId)}
+                      aria-label={`Resize ${WINDOW_LABELS[windowId]} block`}
+                      title="Drag to resize block"
+                      disabled={workspaceLayout.sizesLocked}
+                    >
+                      ⇲
+                    </button>
+                  ) : null}
+                </div>
+
+                {!workspaceLayout.locked && dragTarget?.column === column && dragTarget.index === index + 1 ? <div className="drop-indicator" aria-hidden="true" /> : null}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -1941,80 +2904,251 @@ export default function App(): JSX.Element {
     );
   };
 
+  const goToPreviousGuideStep = (): void => {
+    setGuideStepIndex((previous) => Math.max(0, previous - 1));
+  };
+
+  const goToNextGuideStep = (): void => {
+    if (guideStepIndex >= guideSteps.length - 1) {
+      completeGuide();
+      return;
+    }
+    setGuideStepIndex((previous) => Math.min(guideSteps.length - 1, previous + 1));
+  };
+
+  const guideCardStyle: CSSProperties = (() => {
+    if (!guideTargetRect) {
+      return {
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)'
+      };
+    }
+
+    const width = Math.min(360, Math.max(240, window.innerWidth - 24));
+    let left = Math.max(12, Math.min(guideTargetRect.left, window.innerWidth - width - 12));
+    let top = guideTargetRect.bottom + 14;
+    const estimatedHeight = 190;
+    if (top + estimatedHeight > window.innerHeight - 12) {
+      top = Math.max(12, guideTargetRect.top - estimatedHeight - 14);
+    }
+    if (left + width > window.innerWidth - 12) {
+      left = window.innerWidth - width - 12;
+    }
+
+    return {
+      width: `${width}px`,
+      top: `${top}px`,
+      left: `${left}px`
+    };
+  })();
+
   return (
-    <main className="app-shell" style={{ backgroundImage: currentBackground.image }}>
+    <main
+      className={['app-shell', 'mobile-panel-nav-enabled', resultHighlight ? `result-highlight-${resultHighlight}` : '']
+        .filter(Boolean)
+        .join(' ')}
+      style={{ backgroundImage: currentBackground.image }}
+    >
       <div className="overlay" />
       <div className="content">
         <header className="hero hero-shell">
-          <div className="hero-main">
-            <h1>Dice Workspace Roller</h1>
-            <p>DnD-focused shared roller with formula helpers and movable windows.</p>
-            <div className="badge-row">
-              <span className="badge">Storage: {storageKind === 'opfs' ? 'OPFS file' : 'IndexedDB fallback'}</span>
-              <span className="badge">Realtime: {realtimeReady ? 'Supabase enabled' : 'Not configured'}</span>
-            </div>
-          </div>
-
           <div className="hero-actions">
             <div className="hero-action-row">
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Open background theme selector"
-                aria-haspopup="dialog"
-                onClick={() => setShowThemeModal(true)}
-              >
-                🎨
-              </button>
-              <button
-                type="button"
-                className="hero-action-btn"
-                aria-label="Open stat and save modifiers"
-                aria-haspopup="dialog"
-                onClick={() => setShowModifiersModal(true)}
-              >
-                Stats & Saves
-              </button>
-              <button
-                type="button"
-                className="window-lock-btn"
-                aria-label="Open layout studio"
-                aria-haspopup="dialog"
-                onClick={() => setShowLayoutModal(true)}
-              >
-                Layout Studio
-              </button>
+              {!isMobileViewport ? (
+                <>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="Open background theme selector"
+                    aria-haspopup="dialog"
+                    onClick={() => setShowThemeModal(true)}
+                  >
+                    🎨
+                  </button>
+                  <button
+                    type="button"
+                    className="hero-action-btn"
+                    aria-label="Open stat and save modifiers"
+                    aria-haspopup="dialog"
+                    onClick={() => setShowModifiersModal(true)}
+                  >
+                    Stats & Saves
+                  </button>
+                  <button
+                    type="button"
+                    className="window-lock-btn"
+                    aria-label="Open layout studio"
+                    aria-haspopup="dialog"
+                    onClick={() => setShowLayoutModal(true)}
+                  >
+                    Layout Studio
+                  </button>
+                  <button
+                    type="button"
+                    className="hero-action-btn"
+                    aria-label="Open quick setup assistant"
+                    onClick={openSetupGuide}
+                  >
+                    Setup Guide
+                  </button>
+                </>
+              ) : null}
+              {isMobileViewport ? (
+                <button
+                  type="button"
+                  className="hero-room-btn hero-room-btn-inline"
+                  aria-label="Open player and shared room controls"
+                  aria-haspopup="dialog"
+                  ref={roomButtonRef}
+                  onClick={() => setShowRoomModal(true)}
+                >
+                  {connectedRoomCode
+                    ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
+                    : 'Player & Shared Room'}
+                </button>
+              ) : null}
+              <div className="hero-menu-wrap" ref={heroMenuRef}>
+                <button
+                  type="button"
+                  className="icon-btn hero-menu-btn"
+                  aria-label="Open main menu"
+                  aria-haspopup="menu"
+                  aria-expanded={showHeroMenu}
+                  aria-controls="hero-main-menu"
+                  onClick={() => {
+                    setShowHeroMenu((previous) => !previous);
+                  }}
+                >
+                  <span className="burger-icon" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </button>
+                {showHeroMenu ? (
+                  <div id="hero-main-menu" className="hero-menu-popover" role="menu" aria-label="Main menu">
+                    {isMobileViewport ? (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setShowHeroMenu(false);
+                            setShowThemeModal(true);
+                          }}
+                        >
+                          Palette
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setShowHeroMenu(false);
+                            setShowModifiersModal(true);
+                          }}
+                        >
+                          Stats & Saves
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setShowHeroMenu(false);
+                            openSetupGuide();
+                          }}
+                        >
+                          Setup Guide
+                        </button>
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowHeroMenu(false);
+                        setShowFeedbackModal(true);
+                      }}
+                    >
+                      Feedback & Accessibility
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
 
-            <button
-              type="button"
-              className="hero-room-btn"
-              aria-label="Open player and shared room controls"
-              aria-haspopup="dialog"
-              onClick={() => setShowRoomModal(true)}
-            >
-              {connectedRoomCode
-                ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
-                : 'Player & Shared Room'}
-            </button>
+            {!isMobileViewport ? (
+              <button
+                type="button"
+                className="hero-room-btn"
+                aria-label="Open player and shared room controls"
+                aria-haspopup="dialog"
+                ref={roomButtonRef}
+                onClick={() => setShowRoomModal(true)}
+              >
+                {connectedRoomCode
+                  ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
+                  : 'Player & Shared Room'}
+              </button>
+            ) : null}
 
-            <div className="layout-status-row">
-              <span className="badge">{workspaceLayout.locked ? 'Windows locked' : 'Windows unlocked'}</span>
-              <span className="badge">{workspaceLayout.windowsResizable ? 'Block sizing on' : 'Block sizing off'}</span>
-              <span className="badge">Columns {workspaceLayout.columnSplit}/{100 - (workspaceLayout.columnSplit ?? 45)}</span>
-            </div>
+            {!isMobileViewport ? (
+              <div className="layout-status-row">
+                <span className="badge">Storage: {storageKind === 'opfs' ? 'OPFS file' : 'IndexedDB fallback'}</span>
+                <span className="badge">Realtime: {realtimeReady ? 'Supabase enabled' : 'Not configured'}</span>
+                <span className="badge">{workspaceLayout.locked ? 'Windows locked' : 'Windows unlocked'}</span>
+                <span className="badge">{workspaceLayout.windowsResizable ? 'Block sizing on' : 'Block sizing off'}</span>
+                <span className="badge">Columns {workspaceLayout.columnSplit}/{100 - (workspaceLayout.columnSplit ?? 45)}</span>
+              </div>
+            ) : (
+              <div className="mobile-view-title" aria-live="polite">
+                <span>{MOBILE_VIEW_LABELS[mobileActiveWindow]}</span>
+              </div>
+            )}
           </div>
         </header>
 
         {(error || localError || statusMessage) && (
-          <section className="panel status-panel" aria-live="polite">
-            {error ? <p className="error-text">Storage error: {error}</p> : null}
-            {localError ? <p className="error-text">{localError}</p> : null}
-            {statusMessage ? <p className="status-text">{statusMessage}</p> : null}
-          </section>
+          <div className="toast-stack" aria-live="polite" aria-atomic="false">
+            {error ? (
+              <section className="toast toast-error" role="alert">
+                <p>Storage error: {error}</p>
+              </section>
+            ) : null}
+            {localError ? (
+              <section className="toast toast-error" role="alert">
+                <p>{localError}</p>
+                <button
+                  type="button"
+                  className="toast-close-btn"
+                  aria-label="Dismiss error message"
+                  onClick={() => setLocalError(null)}
+                >
+                  ✕
+                </button>
+              </section>
+            ) : null}
+            {statusMessage ? (
+              <section className="toast toast-success" role="status">
+                <p>{statusMessage}</p>
+                <button
+                  type="button"
+                  className="toast-close-btn"
+                  aria-label="Dismiss status message"
+                  onClick={() => setStatusMessage(null)}
+                >
+                  ✕
+                </button>
+              </section>
+            ) : null}
+          </div>
         )}
 
-        <div className={`workspace-grid ${showLayoutModal ? 'layout-live-preview' : ''}`.trim()} style={workspaceGridStyle}>
+        <div
+          ref={workspaceGridRef}
+          className={`workspace-grid ${showLayoutModal ? 'layout-live-preview' : ''}`.trim()}
+          style={workspaceGridStyle}
+        >
           {renderColumn('left')}
           {renderColumn('right')}
         </div>
@@ -2082,6 +3216,37 @@ export default function App(): JSX.Element {
 
             <p className="muted-text layout-hud-hint">Shortcuts: `Alt+Shift+Arrows` resize, `Alt+[ / ]` reorder. Use corner handle for free resize.</p>
           </aside>
+        ) : null}
+
+        {isMobileViewport ? (
+          <div className="mobile-bottom-stack" ref={mobileBottomStackRef}>
+            <div className="mobile-quick-actions" aria-label="Mobile quick actions">
+              <button type="button" onClick={runQuickPublicD20}>
+                1d20
+              </button>
+              <button type="button" onClick={runQuickSecretD20}>
+                Secret d20
+              </button>
+            </div>
+            <nav className="mobile-panel-nav" aria-label="Mobile panel navigation">
+              {MOBILE_NAV_WINDOW_ORDER.map((windowId) => (
+                <button
+                  key={windowId}
+                  type="button"
+                  className={mobileActiveWindow === windowId ? 'active' : ''}
+                  aria-current={mobileActiveWindow === windowId ? 'page' : undefined}
+                  ref={(element) => {
+                    mobileNavButtonRefs.current[windowId] = element;
+                  }}
+                  onClick={() => {
+                    setMobileActiveWindow(windowId);
+                  }}
+                >
+                  {MOBILE_NAV_LABELS[windowId]}
+                </button>
+              ))}
+            </nav>
+          </div>
         ) : null}
 
         {activePresetOption ? (
@@ -2168,15 +3333,7 @@ export default function App(): JSX.Element {
                   type="button"
                   onClick={() => {
                     clearMessages();
-                    try {
-                      const preset = applyPreset(data.presets, activePresetOption.id);
-                      setCounts({ ...preset.counts });
-                      setFormula(preset.formula);
-                      setSecretRoll(preset.secret);
-                      setStatusMessage(`Preset "${preset.name}" applied.`);
-                    } catch (applyError) {
-                      setPresetOptionsError((applyError as Error).message);
-                    }
+                    applyPresetById(activePresetOption.id);
                   }}
                 >
                   Apply
@@ -2208,7 +3365,11 @@ export default function App(): JSX.Element {
                     const remaining = data.presets.filter((preset) => preset.id !== activePresetOption.id);
                     commit((previous) => ({
                       ...previous,
-                      presets: deletePreset(previous.presets, activePresetOption.id)
+                      presets: deletePreset(previous.presets, activePresetOption.id),
+                      preferences: {
+                        ...previous.preferences,
+                        favoritePresetIds: previous.preferences.favoritePresetIds.filter((id) => id !== activePresetOption.id)
+                      }
                     }));
                     setStatusMessage('Preset deleted.');
                     if (remaining.length > 0) {
@@ -2333,6 +3494,92 @@ export default function App(): JSX.Element {
           <Modal title="Player & Shared Room" onClose={() => setShowRoomModal(false)} className="room-modal-shell">
             {roomPanel}
           </Modal>
+        ) : null}
+
+        {showFeedbackModal ? (
+          <Modal title="Feedback & Accessibility" onClose={() => setShowFeedbackModal(false)} className="feedback-modal-shell">
+            <section className="panel feedback-panel">
+              <p className="panel-subtitle">Tune visual emphasis, sound, haptics, and reduced motion behavior.</p>
+              <div className="quick-toggle-grid">
+                <label className="inline-toggle" htmlFor="feedback-result-fx-enabled">
+                  <input
+                    id="feedback-result-fx-enabled"
+                    type="checkbox"
+                    checked={data.preferences.resultFxEnabled}
+                    onChange={(event) => setResultFxEnabled(event.target.checked)}
+                  />
+                  Result emphasis
+                </label>
+                <label className="inline-toggle" htmlFor="feedback-result-fx-sound">
+                  <input
+                    id="feedback-result-fx-sound"
+                    type="checkbox"
+                    checked={data.preferences.resultFxSound}
+                    onChange={(event) => setResultFxSound(event.target.checked)}
+                    disabled={!data.preferences.resultFxEnabled}
+                  />
+                  Sound cues
+                </label>
+                <label className="inline-toggle" htmlFor="feedback-result-fx-haptics">
+                  <input
+                    id="feedback-result-fx-haptics"
+                    type="checkbox"
+                    checked={data.preferences.resultFxHaptics}
+                    onChange={(event) => setResultFxHaptics(event.target.checked)}
+                    disabled={!data.preferences.resultFxEnabled}
+                  />
+                  Haptic cues
+                </label>
+                <label className="inline-toggle" htmlFor="feedback-reduce-motion">
+                  <input
+                    id="feedback-reduce-motion"
+                    type="checkbox"
+                    checked={data.preferences.reduceMotion}
+                    onChange={(event) => setReduceMotionPreference(event.target.checked)}
+                  />
+                  Reduce motion
+                </label>
+              </div>
+            </section>
+          </Modal>
+        ) : null}
+
+        {showGuide && activeGuideStep ? (
+          <div className="guide-overlay" role="dialog" aria-live="polite" aria-label="Guided setup helper">
+            {guideTargetRect ? (
+              <div
+                className="guide-highlight"
+                style={{
+                  top: `${guideTargetRect.top}px`,
+                  left: `${guideTargetRect.left}px`,
+                  width: `${guideTargetRect.width}px`,
+                  height: `${guideTargetRect.height}px`
+                }}
+              />
+            ) : null}
+
+            <div className="guide-card panel" style={guideCardStyle}>
+              <p className="guide-progress">
+                Step {guideStepIndex + 1} / {guideSteps.length}
+              </p>
+              <h3>{activeGuideStep.title}</h3>
+              <p className="panel-subtitle">{activeGuideStep.description}</p>
+              <p className="muted-text">Click the highlighted area to advance, or use Next.</p>
+              <div className="row wrap gap-sm guide-actions">
+                {guideStepIndex > 0 ? (
+                  <button type="button" onClick={goToPreviousGuideStep}>
+                    Back
+                  </button>
+                ) : null}
+                <button type="button" onClick={goToNextGuideStep} className="primary-btn">
+                  {guideStepIndex >= guideSteps.length - 1 ? 'Finish' : 'Next'}
+                </button>
+                <button type="button" onClick={closeGuide}>
+                  Skip
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
       </div>
     </main>

@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 
 interface ModalProps {
   title: string;
@@ -9,17 +9,63 @@ interface ModalProps {
 
 export function Modal({ title, onClose, children, className }: ModalProps): JSX.Element {
   const headingId = useId();
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const focusableSelector =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
   useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const shell = shellRef.current;
+    const focusables = shell?.querySelectorAll<HTMLElement>(focusableSelector);
+    const firstFocusable = focusables?.[0] ?? shell;
+    firstFocusable?.focus();
+
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const activeShell = shellRef.current;
+      if (!activeShell) {
+        return;
+      }
+
+      const activeFocusable = activeShell.querySelectorAll<HTMLElement>(focusableSelector);
+      if (activeFocusable.length === 0) {
+        event.preventDefault();
+        activeShell.focus();
+        return;
+      }
+
+      const first = activeFocusable[0];
+      const last = activeFocusable[activeFocusable.length - 1];
+      const activeElement = document.activeElement as HTMLElement | null;
+
+      if (event.shiftKey) {
+        if (!activeElement || activeElement === first || !activeShell.contains(activeElement)) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+
+      if (!activeElement || activeElement === last || !activeShell.contains(activeElement)) {
+        event.preventDefault();
+        first.focus();
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [focusableSelector, onClose]);
 
   return (
     <div
@@ -31,7 +77,7 @@ export function Modal({ title, onClose, children, className }: ModalProps): JSX.
         }
       }}
     >
-      <div className={`modal-shell ${className ?? ''}`.trim()} role="dialog" aria-modal="true" aria-labelledby={headingId}>
+      <div className={`modal-shell ${className ?? ''}`.trim()} role="dialog" aria-modal="true" aria-labelledby={headingId} ref={shellRef} tabIndex={-1}>
         <header className="modal-header">
           <h2 id={headingId}>{title}</h2>
           <button type="button" onClick={onClose} className="modal-close-btn" aria-label={`Close ${title}`}>

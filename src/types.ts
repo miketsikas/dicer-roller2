@@ -38,6 +38,13 @@ export interface Preferences {
   backgroundId: string;
   autoCarousel: boolean;
   rngMode: RngMode;
+  guidedSetupCompleted: boolean;
+  favoritePresetIds: string[];
+  reduceMotion: boolean;
+  resultFxEnabled: boolean;
+  resultFxSound: boolean;
+  resultFxHaptics: boolean;
+  mobileQuickRoll: boolean;
 }
 
 export interface ModerationSettings {

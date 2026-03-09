@@ -2,12 +2,23 @@ import { useMemo, useState } from 'react';
 import type { FeedItem, RollEntry } from '../types';
 import { poolsToReadableLabel } from '../lib/dice';
 
+export interface HistoryFilters {
+  searchText: string;
+  mineOnly: boolean;
+  showPublic: boolean;
+  showSecret: boolean;
+  formulaOnly: boolean;
+}
+
 interface HistoryFeedProps {
   density?: 'regular' | 'compact' | 'tiny';
   items: FeedItem[];
+  filters: HistoryFilters;
+  activeAlias: string;
   mutedAliases: string[];
   hasMore: boolean;
   loadingMore: boolean;
+  onFiltersChange: (next: HistoryFilters) => void;
   onLoadMore: () => void;
 }
 
@@ -17,7 +28,17 @@ function entryDetails(entry: RollEntry): string {
   return `${label}${modifierLabel}`;
 }
 
-export function HistoryFeed({ density = 'regular', items, mutedAliases, hasMore, loadingMore, onLoadMore }: HistoryFeedProps): JSX.Element {
+export function HistoryFeed({
+  density = 'regular',
+  items,
+  filters,
+  activeAlias,
+  mutedAliases,
+  hasMore,
+  loadingMore,
+  onFiltersChange,
+  onLoadMore
+}: HistoryFeedProps): JSX.Element {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [expandedBursts, setExpandedBursts] = useState<Record<string, boolean>>({});
   const compact = density !== 'regular';
@@ -36,10 +57,85 @@ export function HistoryFeed({ density = 'regular', items, mutedAliases, hasMore,
     setExpandedBursts((previous) => ({ ...previous, [id]: !previous[id] }));
   };
 
+  const setSearchText = (value: string): void => {
+    onFiltersChange({
+      ...filters,
+      searchText: value
+    });
+  };
+
+  const toggleMineOnly = (): void => {
+    onFiltersChange({
+      ...filters,
+      mineOnly: !filters.mineOnly
+    });
+  };
+
+  const togglePublic = (): void => {
+    onFiltersChange({
+      ...filters,
+      showPublic: !filters.showPublic
+    });
+  };
+
+  const toggleSecret = (): void => {
+    onFiltersChange({
+      ...filters,
+      showSecret: !filters.showSecret
+    });
+  };
+
+  const toggleFormulaOnly = (): void => {
+    onFiltersChange({
+      ...filters,
+      formulaOnly: !filters.formulaOnly
+    });
+  };
+
+  const mineLabel = tiny ? 'Me' : 'Mine';
+  const publicLabel = tiny ? 'Pub' : 'Public';
+  const secretLabel = tiny ? 'Sec' : 'Secret';
+  const formulaLabel = tiny ? 'Fx' : 'Formula';
+
   return (
     <section className={`panel history-panel density-${density}`}>
       <h2>Roll History</h2>
       {!compact ? <p className="panel-subtitle">Newest first. Long roll details and duplicate bursts can be expanded inline.</p> : null}
+      <div className="history-filter-row">
+        <button type="button" className={`filter-chip ${filters.mineOnly ? 'active' : ''}`} aria-pressed={filters.mineOnly} onClick={toggleMineOnly}>
+          {mineLabel}
+        </button>
+        <button
+          type="button"
+          className={`filter-chip ${filters.showPublic ? 'active' : ''}`}
+          aria-pressed={filters.showPublic}
+          onClick={togglePublic}
+        >
+          {publicLabel}
+        </button>
+        <button
+          type="button"
+          className={`filter-chip ${filters.showSecret ? 'active' : ''}`}
+          aria-pressed={filters.showSecret}
+          onClick={toggleSecret}
+        >
+          {secretLabel}
+        </button>
+        <button
+          type="button"
+          className={`filter-chip ${filters.formulaOnly ? 'active' : ''}`}
+          aria-pressed={filters.formulaOnly}
+          onClick={toggleFormulaOnly}
+        >
+          {formulaLabel}
+        </button>
+      </div>
+      <input
+        value={filters.searchText}
+        onChange={(event) => setSearchText(event.target.value)}
+        placeholder={tiny ? 'Search rolls' : 'Search by alias or formula'}
+        aria-label="Search history by alias or formula"
+      />
 
       <div className="history-scroll">
         <ul className="history-list" aria-label="Roll history feed">
@@ -51,21 +147,27 @@ export function HistoryFeed({ density = 'regular', items, mutedAliases, hasMore,
             const isExpanded = !!expandedRows[entry.id];
             const isMuted = mutedSet.has(entry.playerAlias.trim().toLowerCase());
             const burstExpanded = !!expandedBursts[entry.id];
+            const isMine = entry.playerAlias.trim().toLowerCase() === activeAlias;
+            const screenReaderSummary = `${entry.playerAlias} rolled total ${entry.total}${entry.secret ? ' in secret' : ' in public'}${entry.formula ? ` with formula ${entry.formula}` : ''}${item.duplicates.length > 0 ? ` and ${item.duplicates.length} burst duplicates` : ''}`;
 
             return (
-              <li key={entry.id} className={`history-item ${entry.secret ? 'secret' : ''} ${isMuted ? 'muted' : ''}`}>
+              <li
+                key={entry.id}
+                className={`history-item ${entry.secret ? 'secret' : ''} ${isMuted ? 'muted' : ''} ${isMine ? 'mine' : ''}`}
+                aria-label={screenReaderSummary}
+              >
                 <header>
                   <strong>{entry.playerAlias}</strong>
-                  {!tiny ? <span>{entry.roomName}</span> : null}
+                  {!compact ? <span>{entry.roomName}</span> : null}
                   <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
                 </header>
 
                 <p>
-                  Total: <strong>{entry.total}</strong>
-                  {entry.secret ? ' (Secret)' : ''}
-                  {item.duplicates.length > 0 ? ` | Burst x${item.duplicates.length + 1}` : ''}
+                  {tiny ? 'Total' : 'Total:'} <strong>{entry.total}</strong>
+                  {entry.secret ? (tiny ? ' • Secret' : ' (Secret)') : ''}
+                  {item.duplicates.length > 0 ? (tiny ? ` • Burst x${item.duplicates.length + 1}` : ` | Burst x${item.duplicates.length + 1}`) : ''}
                 </p>
-                <p className="muted-text">{entry.formula ? `Formula: ${entry.formula}` : `Source: ${entry.source}`}</p>
+                <p className="muted-text">{entry.formula ? `${tiny ? 'Fx' : 'Formula'}: ${entry.formula}` : `${tiny ? 'From' : 'Source'}: ${entry.source}`}</p>
 
                 <p className="mono">
                   {longDetails && !isExpanded ? `${details.slice(0, detailsLimit)}...` : details}
@@ -105,12 +207,12 @@ export function HistoryFeed({ density = 'regular', items, mutedAliases, hasMore,
               </li>
             );
           })}
-          {items.length === 0 ? <li className="muted-text">No rolls yet.</li> : null}
+          {items.length === 0 ? <li className="muted-text">No matching rolls yet.</li> : null}
         </ul>
       </div>
       {hasMore ? (
         <button type="button" onClick={onLoadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading...' : compact ? 'Load 100 more' : 'Load more (100 older)'}
+          {loadingMore ? 'Loading...' : tiny ? 'Load More' : compact ? 'Load 100 more' : 'Load more (100 older)'}
         </button>
       ) : null}
     </section>

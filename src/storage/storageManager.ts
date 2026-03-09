@@ -75,7 +75,14 @@ export function createDefaultData(clientId: string, now = Date.now()): AppData {
       defaultSecret: false,
       backgroundId: 'citadel',
       autoCarousel: false,
-      rngMode: 'crypto'
+      rngMode: 'crypto',
+      guidedSetupCompleted: false,
+      favoritePresetIds: [],
+      reduceMotion: false,
+      resultFxEnabled: true,
+      resultFxSound: false,
+      resultFxHaptics: true,
+      mobileQuickRoll: true
     },
     characterModifiers: defaultCharacterModifiers(),
     workspaceLayout: defaultWorkspaceLayout(),
@@ -158,7 +165,16 @@ function normalizeLoadedData(data: AppData): AppData {
       defaultSecret: data.preferences?.defaultSecret ?? false,
       backgroundId: data.preferences?.backgroundId ?? 'citadel',
       autoCarousel: data.preferences?.autoCarousel ?? false,
-      rngMode: data.preferences?.rngMode ?? 'crypto'
+      rngMode: data.preferences?.rngMode ?? 'crypto',
+      guidedSetupCompleted: data.preferences?.guidedSetupCompleted ?? true,
+      favoritePresetIds: Array.isArray(data.preferences?.favoritePresetIds)
+        ? data.preferences.favoritePresetIds.filter((entry): entry is string => typeof entry === 'string')
+        : [],
+      reduceMotion: data.preferences?.reduceMotion ?? false,
+      resultFxEnabled: data.preferences?.resultFxEnabled ?? true,
+      resultFxSound: data.preferences?.resultFxSound ?? false,
+      resultFxHaptics: data.preferences?.resultFxHaptics ?? true,
+      mobileQuickRoll: data.preferences?.mobileQuickRoll ?? true
     },
     characterModifiers: {
       stats: {

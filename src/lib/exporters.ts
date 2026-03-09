@@ -52,6 +52,27 @@ export function parseImportedSession(raw: string): AppData {
   if (typeof parsed.preferences.roomCode !== 'string') {
     parsed.preferences.roomCode = '';
   }
+  if (typeof parsed.preferences.guidedSetupCompleted !== 'boolean') {
+    parsed.preferences.guidedSetupCompleted = true;
+  }
+  if (!Array.isArray(parsed.preferences.favoritePresetIds)) {
+    parsed.preferences.favoritePresetIds = [];
+  }
+  if (typeof parsed.preferences.reduceMotion !== 'boolean') {
+    parsed.preferences.reduceMotion = false;
+  }
+  if (typeof parsed.preferences.resultFxEnabled !== 'boolean') {
+    parsed.preferences.resultFxEnabled = true;
+  }
+  if (typeof parsed.preferences.resultFxSound !== 'boolean') {
+    parsed.preferences.resultFxSound = false;
+  }
+  if (typeof parsed.preferences.resultFxHaptics !== 'boolean') {
+    parsed.preferences.resultFxHaptics = true;
+  }
+  if (typeof parsed.preferences.mobileQuickRoll !== 'boolean') {
+    parsed.preferences.mobileQuickRoll = true;
+  }
 
   for (const entry of parsed.rollHistory) {
     if (!entry.roomCode) {

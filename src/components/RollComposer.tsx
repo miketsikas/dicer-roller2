@@ -61,10 +61,12 @@ export function RollComposer({
   const hasFormula = formula.trim().length > 0;
   const compact = density !== 'regular';
   const tiny = density === 'tiny';
+  const formulaSummaryLabel = tiny ? 'Formula' : compact ? 'Formula Mode' : 'Formula Mode (optional)';
+  const formulaStatusLabel = hasFormula ? 'Ready' : compact ? 'Off' : 'Closed by default';
 
   return (
     <section className={`panel roll-composer density-${density}`}>
-      <h2>{tiny ? 'Dice' : 'Dice Roller'}</h2>
+      <h2>{tiny ? 'Roll' : 'Dice Roller'}</h2>
       <div className="dice-grid">
         {DICE_SIDES.map((sides) => (
           <label key={sides} htmlFor={`dice-${sides}`} className="dice-input">
@@ -90,88 +92,90 @@ export function RollComposer({
         ))}
       </div>
 
-      <details className="formula-shell formula-mode-accordion">
-        <summary>
-          <span>{compact ? 'Formula Mode' : 'Formula Mode (optional)'}</span>
-          <span className="formula-summary-meta">{hasFormula ? 'Formula ready' : compact ? 'Off' : 'Closed by default'}</span>
-        </summary>
-        <div className="formula-shell-body">
-          <label htmlFor="formula-input">Formula</label>
-          <input
-            id="formula-input"
-            placeholder={tiny ? '(2d20kh1+5)*2' : 'Examples: (2d20kh1+5)*2, 4d6kh3, 3d8m4, 1d20+7'}
-            value={formula}
-            onChange={(event) => onFormulaChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                if (formula.trim()) {
-                  onRollFormula();
-                } else {
-                  onRoll();
+      <div className="formula-scroll-shell">
+        <details className="formula-shell formula-mode-accordion">
+          <summary>
+            <span>{formulaSummaryLabel}</span>
+            <span className="formula-summary-meta">{formulaStatusLabel}</span>
+          </summary>
+          <div className="formula-shell-body">
+            <label htmlFor="formula-input">Formula</label>
+            <input
+              id="formula-input"
+              placeholder={tiny ? 'e.g. 2d20kh1+5' : 'Examples: (2d20kh1+5)*2, 4d6kh3, 3d8m4, 1d20+7'}
+              value={formula}
+              onChange={(event) => onFormulaChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  if (formula.trim()) {
+                    onRollFormula();
+                  } else {
+                    onRoll();
+                  }
                 }
-              }
-            }}
-            aria-describedby="formula-help"
-          />
-          {!tiny ? (
-            <p id="formula-help" className="muted-text">
-              Roll Dice uses selected dice only. Use Roll Formula to execute this formula. Supports `()`, `*`, `/`, `kh`/`kl`, and `m`.
-            </p>
-          ) : null}
-          {!compact ? (
-            <div className="formula-hints" aria-label="Formula examples">
-              <span className="hint-chip">2d20kh1+5</span>
-              <span className="hint-chip">(4d6kh3+2)/2</span>
-              <span className="hint-chip">3d8m4</span>
-              <span className="hint-chip">2*(1d12+3)</span>
-            </div>
-          ) : null}
-
-          <details className="formula-accordion">
-            <summary>{compact ? 'Add modifier' : 'Add stat/save modifier'}</summary>
-            <div className="formula-accordion-body">
-              <h3>Stats</h3>
-              <div className="modifier-chip-row">
-                {STAT_OPTIONS.map((option) => {
-                  const total = modifiers.stats[option.key].base + modifiers.stats[option.key].temp;
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      className="modifier-chip-btn"
-                      onClick={() => onInsertModifier(option.key, option.label)}
-                      aria-label={`Add ${option.label} modifier ${signed(total)} to formula`}
-                    >
-                      <span>{option.label}</span>
-                      <strong>{signed(total)}</strong>
-                    </button>
-                  );
-                })}
+              }}
+              aria-describedby="formula-help"
+            />
+            {!tiny ? (
+              <p id="formula-help" className="muted-text">
+                Roll Dice uses selected dice only. Use Roll Formula to execute this formula. Supports `()`, `*`, `/`, `kh`/`kl`, and `m`.
+              </p>
+            ) : null}
+            {!compact ? (
+              <div className="formula-hints" aria-label="Formula examples">
+                <span className="hint-chip">2d20kh1+5</span>
+                <span className="hint-chip">(4d6kh3+2)/2</span>
+                <span className="hint-chip">3d8m4</span>
+                <span className="hint-chip">2*(1d12+3)</span>
               </div>
+            ) : null}
 
-              <h3>Saves</h3>
-              <div className="modifier-chip-row">
-                {SAVE_OPTIONS.map((option) => {
-                  const total = modifiers.saves[option.key].base + modifiers.saves[option.key].temp;
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      className="modifier-chip-btn"
-                      onClick={() => onInsertModifier(option.key, option.label)}
-                      aria-label={`Add ${option.label} modifier ${signed(total)} to formula`}
-                    >
-                      <span>{option.label}</span>
-                      <strong>{signed(total)}</strong>
-                    </button>
-                  );
-                })}
+            <details className="formula-accordion">
+              <summary>{compact ? 'Add modifier' : 'Add stat/save modifier'}</summary>
+              <div className="formula-accordion-body">
+                <h3>Stats</h3>
+                <div className="modifier-chip-row">
+                  {STAT_OPTIONS.map((option) => {
+                    const total = modifiers.stats[option.key].base + modifiers.stats[option.key].temp;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className="modifier-chip-btn"
+                        onClick={() => onInsertModifier(option.key, option.label)}
+                        aria-label={`Add ${option.label} modifier ${signed(total)} to formula`}
+                      >
+                        <span>{option.label}</span>
+                        <strong>{signed(total)}</strong>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <h3>Saves</h3>
+                <div className="modifier-chip-row">
+                  {SAVE_OPTIONS.map((option) => {
+                    const total = modifiers.saves[option.key].base + modifiers.saves[option.key].temp;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className="modifier-chip-btn"
+                        onClick={() => onInsertModifier(option.key, option.label)}
+                        aria-label={`Add ${option.label} modifier ${signed(total)} to formula`}
+                      >
+                        <span>{option.label}</span>
+                        <strong>{signed(total)}</strong>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          </details>
-        </div>
-      </details>
+            </details>
+          </div>
+        </details>
+      </div>
 
       <div className="row wrap gap-sm">
         <label className="inline-toggle" htmlFor="secret-roll-toggle">
@@ -181,17 +185,17 @@ export function RollComposer({
             checked={secretRoll}
             onChange={(event) => onSecretRollChange(event.target.checked)}
           />
-          Secret roll
+          {tiny ? 'Secret' : 'Secret roll'}
         </label>
       </div>
 
       <div className="row wrap gap-sm composer-actions">
         <button type="button" onClick={onRoll} className={hasFormula ? 'secondary-btn' : 'primary-btn'}>
-          {tiny ? 'Roll' : 'Roll Dice'}
+          Roll Dice
         </button>
         {hasFormula ? (
           <button type="button" onClick={onRollFormula} className="primary-btn">
-            {tiny ? 'Formula' : 'Roll Formula'}
+            Roll Formula
           </button>
         ) : null}
         <button type="button" onClick={onReset} className="secondary-btn">

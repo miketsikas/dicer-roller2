@@ -40,7 +40,14 @@ function mockData(updatedAt: number): AppData {
       defaultSecret: false,
       backgroundId: 'forge',
       autoCarousel: true,
-      rngMode: 'crypto'
+      rngMode: 'crypto',
+      guidedSetupCompleted: true,
+      favoritePresetIds: [],
+      reduceMotion: false,
+      resultFxEnabled: true,
+      resultFxSound: false,
+      resultFxHaptics: true,
+      mobileQuickRoll: true
     },
     characterModifiers: {
       stats: {
