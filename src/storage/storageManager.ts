@@ -16,6 +16,52 @@ function defaultCounts(): DiceCounts {
   return createEmptyCounts();
 }
 
+const DEFAULT_STATS = {
+  str: { base: 0, temp: 0 },
+  dex: { base: 0, temp: 0 },
+  con: { base: 0, temp: 0 },
+  int: { base: 0, temp: 0 },
+  wis: { base: 0, temp: 0 },
+  cha: { base: 0, temp: 0 }
+} as const;
+
+const DEFAULT_SAVES = {
+  fort: { base: 0, temp: 0 },
+  reflex: { base: 0, temp: 0 },
+  will: { base: 0, temp: 0 }
+} as const;
+
+const DEFAULT_LAYOUT_LEFT = ['quickActions', 'history'] as const;
+const DEFAULT_LAYOUT_RIGHT = ['presets', 'rollComposer'] as const;
+
+function defaultCharacterModifiers() {
+  return {
+    stats: {
+      ...DEFAULT_STATS
+    },
+    saves: {
+      ...DEFAULT_SAVES
+    }
+  };
+}
+
+function defaultWorkspaceLayout() {
+  return {
+    locked: true,
+    leftOrder: [...DEFAULT_LAYOUT_LEFT],
+    rightOrder: [...DEFAULT_LAYOUT_RIGHT],
+    windowsResizable: false,
+    columnSplit: 45,
+    sizesLocked: false,
+    windowWidths: {},
+    windowHeights: {}
+  };
+}
+
+function safeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 export function createDefaultData(clientId: string, now = Date.now()): AppData {
   return {
     clientId,
@@ -27,10 +73,12 @@ export function createDefaultData(clientId: string, now = Date.now()): AppData {
       roomName: 'Local Workspace',
       roomCode: '',
       defaultSecret: false,
-      backgroundId: 'forge',
-      autoCarousel: true,
+      backgroundId: 'citadel',
+      autoCarousel: false,
       rngMode: 'crypto'
     },
+    characterModifiers: defaultCharacterModifiers(),
+    workspaceLayout: defaultWorkspaceLayout(),
     rollHistory: [],
     presets: [
       {
@@ -62,6 +110,41 @@ export function createDefaultData(clientId: string, now = Date.now()): AppData {
 }
 
 function normalizeLoadedData(data: AppData): AppData {
+  const rawStats = data.characterModifiers?.stats ?? ({} as Record<string, { base?: unknown; temp?: unknown }>);
+  const rawSaves = data.characterModifiers?.saves ?? ({} as Record<string, { base?: unknown; temp?: unknown }>);
+  const rawLayout = data.workspaceLayout;
+
+  const normalizedLeft = Array.isArray(rawLayout?.leftOrder) ? rawLayout.leftOrder.filter((entry) => typeof entry === 'string') : [];
+  const normalizedRight = Array.isArray(rawLayout?.rightOrder) ? rawLayout.rightOrder.filter((entry) => typeof entry === 'string') : [];
+
+  const safeLayout = {
+    locked: rawLayout?.locked ?? true,
+    leftOrder: normalizedLeft.length > 0 ? normalizedLeft : [...DEFAULT_LAYOUT_LEFT],
+    rightOrder: normalizedRight.length > 0 ? normalizedRight : [...DEFAULT_LAYOUT_RIGHT],
+    windowsResizable: rawLayout?.windowsResizable ?? false,
+    columnSplit:
+      typeof rawLayout?.columnSplit === 'number' && Number.isFinite(rawLayout.columnSplit)
+        ? Math.max(30, Math.min(70, Math.round(rawLayout.columnSplit)))
+        : 45,
+    sizesLocked: rawLayout?.sizesLocked ?? false,
+    windowWidths:
+      rawLayout?.windowWidths && typeof rawLayout.windowWidths === 'object'
+        ? Object.fromEntries(
+            Object.entries(rawLayout.windowWidths).filter(
+              ([key, value]) => typeof key === 'string' && typeof value === 'number' && Number.isFinite(value)
+            )
+          )
+        : {},
+    windowHeights:
+      rawLayout?.windowHeights && typeof rawLayout.windowHeights === 'object'
+        ? Object.fromEntries(
+            Object.entries(rawLayout.windowHeights).filter(
+              ([key, value]) => typeof key === 'string' && typeof value === 'number' && Number.isFinite(value)
+            )
+          )
+        : {}
+  };
+
   return {
     ...data,
     rollHistory: (data.rollHistory ?? []).map((entry) => ({
@@ -73,10 +156,53 @@ function normalizeLoadedData(data: AppData): AppData {
       roomName: data.preferences?.roomName ?? 'Local Workspace',
       roomCode: data.preferences?.roomCode ?? '',
       defaultSecret: data.preferences?.defaultSecret ?? false,
-      backgroundId: data.preferences?.backgroundId ?? 'forge',
-      autoCarousel: data.preferences?.autoCarousel ?? true,
+      backgroundId: data.preferences?.backgroundId ?? 'citadel',
+      autoCarousel: data.preferences?.autoCarousel ?? false,
       rngMode: data.preferences?.rngMode ?? 'crypto'
-    }
+    },
+    characterModifiers: {
+      stats: {
+        str: {
+          base: safeNumber(rawStats.str?.base),
+          temp: safeNumber(rawStats.str?.temp)
+        },
+        dex: {
+          base: safeNumber(rawStats.dex?.base),
+          temp: safeNumber(rawStats.dex?.temp)
+        },
+        con: {
+          base: safeNumber(rawStats.con?.base),
+          temp: safeNumber(rawStats.con?.temp)
+        },
+        int: {
+          base: safeNumber(rawStats.int?.base),
+          temp: safeNumber(rawStats.int?.temp)
+        },
+        wis: {
+          base: safeNumber(rawStats.wis?.base),
+          temp: safeNumber(rawStats.wis?.temp)
+        },
+        cha: {
+          base: safeNumber(rawStats.cha?.base),
+          temp: safeNumber(rawStats.cha?.temp)
+        }
+      },
+      saves: {
+        fort: {
+          base: safeNumber(rawSaves.fort?.base),
+          temp: safeNumber(rawSaves.fort?.temp)
+        },
+        reflex: {
+          base: safeNumber(rawSaves.reflex?.base),
+          temp: safeNumber(rawSaves.reflex?.temp)
+        },
+        will: {
+          base: safeNumber(rawSaves.will?.base),
+          temp: safeNumber(rawSaves.will?.temp)
+        }
+      }
+    },
+    workspaceLayout: safeLayout
   };
 }
 

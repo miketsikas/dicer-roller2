@@ -4,21 +4,34 @@ import type { SavedPreset } from '../types';
 interface PresetsPanelProps {
   presets: SavedPreset[];
   onCreate: (name: string) => void;
-  onRename: (presetId: string, name: string) => void;
-  onUpdate: (presetId: string) => void;
-  onDelete: (presetId: string) => void;
+  onOpenOptions: (presetId: string) => void;
   onApply: (presetId: string) => void;
+  density?: 'regular' | 'compact' | 'tiny';
   className?: string;
 }
 
-export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, onApply, className }: PresetsPanelProps): JSX.Element {
+export function PresetsPanel({ presets, onCreate, onOpenOptions, onApply, density = 'regular', className }: PresetsPanelProps): JSX.Element {
   const [newName, setNewName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
+  const compact = density !== 'regular';
+  const tiny = density === 'tiny';
+  const trimmedName = newName.trim();
+
+  const submitCreate = (): void => {
+    if (!trimmedName) {
+      setCreateError('Preset name is required.');
+      return;
+    }
+
+    setCreateError(null);
+    onCreate(trimmedName);
+    setNewName('');
+  };
 
   return (
-    <section className={`panel ${className ?? ''}`.trim()}>
-      <h2>Saved Dice Combinations</h2>
-      <div className="row gap-sm">
+    <section className={`panel presets-panel density-${density} ${className ?? ''}`.trim()}>
+      <h2>{tiny ? 'Presets' : 'Saved Dice Combinations'}</h2>
+      <div className="row gap-sm presets-header-row">
         <input
           value={newName}
           onChange={(event) => {
@@ -27,26 +40,37 @@ export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, 
               setCreateError(null);
             }
           }}
-          placeholder="Preset name"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              submitCreate();
+            }
+          }}
+          placeholder={compact ? 'Name' : 'Preset name'}
           maxLength={40}
           aria-label="New preset name"
           aria-invalid={!!createError}
         />
         <button
           type="button"
+          onClick={submitCreate}
+        >
+          {tiny ? 'Save' : 'Save Current'}
+        </button>
+        <button
+          type="button"
+          className="preset-action-icon"
+          aria-label="Open saved preset options"
+          disabled={presets.length === 0}
           onClick={() => {
-            const trimmed = newName.trim();
-            if (!trimmed) {
-              setCreateError('Preset name is required.');
+            if (presets.length === 0) {
               return;
             }
-
-            setCreateError(null);
-            onCreate(newName);
-            setNewName('');
+            onOpenOptions(presets[0].id);
           }}
+          title="Open preset options"
         >
-          Save Current
+          ⚙
         </button>
       </div>
       {createError ? <p className="error-text">{createError}</p> : null}
@@ -54,33 +78,20 @@ export function PresetsPanel({ presets, onCreate, onRename, onUpdate, onDelete, 
       <div className="presets-scroll">
         <ul className="item-list" aria-label="Saved presets">
           {presets.map((preset) => (
-            <li key={preset.id} className="list-item">
-              <div>
+            <li key={preset.id} className="list-item compact preset-item-row">
+              <button type="button" className="preset-row-main preset-row-select" onClick={() => onApply(preset.id)} aria-label={`Apply preset ${preset.name}`}>
                 <strong>{preset.name}</strong>
-                <p className="muted-text">{preset.formula || 'Manual dice counts preset'}</p>
-              </div>
-              <div className="row wrap gap-xs">
-                <button type="button" onClick={() => onApply(preset.id)}>
-                  Apply
-                </button>
-                <button type="button" onClick={() => onUpdate(preset.id)}>
-                  Update
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const proposed = window.prompt('Rename preset', preset.name);
-                    if (proposed !== null) {
-                      onRename(preset.id, proposed);
-                    }
-                  }}
-                >
-                  Rename
-                </button>
-                <button type="button" onClick={() => onDelete(preset.id)}>
-                  Delete
-                </button>
-              </div>
+                {!tiny ? <p className="muted-text">{preset.formula || 'Manual dice counts preset'}</p> : null}
+              </button>
+              <button
+                type="button"
+                className="preset-action-icon"
+                aria-label={`Open actions for preset ${preset.name}`}
+                onClick={() => onOpenOptions(preset.id)}
+                title={`Open ${preset.name} options`}
+              >
+                ⋯
+              </button>
             </li>
           ))}
           {presets.length === 0 ? <li className="muted-text">No saved presets yet.</li> : null}

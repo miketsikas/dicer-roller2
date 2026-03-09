@@ -42,6 +42,26 @@ function mockData(updatedAt: number): AppData {
       autoCarousel: true,
       rngMode: 'crypto'
     },
+    characterModifiers: {
+      stats: {
+        str: { base: 0, temp: 0 },
+        dex: { base: 0, temp: 0 },
+        con: { base: 0, temp: 0 },
+        int: { base: 0, temp: 0 },
+        wis: { base: 0, temp: 0 },
+        cha: { base: 0, temp: 0 }
+      },
+      saves: {
+        fort: { base: 0, temp: 0 },
+        reflex: { base: 0, temp: 0 },
+        will: { base: 0, temp: 0 }
+      }
+    },
+    workspaceLayout: {
+      locked: true,
+      leftOrder: ['roomControl', 'presets', 'modifiers'],
+      rightOrder: ['quickActions', 'rollComposer', 'history']
+    },
     rollHistory: [],
     presets: [],
     moderation: {

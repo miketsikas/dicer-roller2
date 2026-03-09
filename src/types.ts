@@ -6,6 +6,30 @@ export type DiceCounts = Record<DieSides, number>;
 
 export type RngMode = 'crypto' | 'math';
 
+export type StatKey = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+export type SaveKey = 'fort' | 'reflex' | 'will';
+
+export interface ModifierField {
+  base: number;
+  temp: number;
+}
+
+export interface CharacterModifiers {
+  stats: Record<StatKey, ModifierField>;
+  saves: Record<SaveKey, ModifierField>;
+}
+
+export interface WorkspaceLayout {
+  locked: boolean;
+  leftOrder: string[];
+  rightOrder: string[];
+  windowsResizable?: boolean;
+  columnSplit?: number;
+  sizesLocked?: boolean;
+  windowWidths?: Record<string, number>;
+  windowHeights?: Record<string, number>;
+}
+
 export interface Preferences {
   playerAlias: string;
   roomName: string;
@@ -72,6 +96,8 @@ export interface AppData {
   updatedAt: number;
   lastCleanupAt: number;
   preferences: Preferences;
+  characterModifiers: CharacterModifiers;
+  workspaceLayout: WorkspaceLayout;
   rollHistory: RollEntry[];
   presets: SavedPreset[];
   moderation: ModerationSettings;

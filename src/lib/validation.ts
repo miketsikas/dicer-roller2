@@ -56,3 +56,19 @@ export function sanitizePositiveInt(value: string | number, max: number): number
   }
   return Math.min(max, Math.floor(parsed));
 }
+
+export function sanitizeSignedInt(value: string | number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  const normalized = Math.floor(parsed);
+  if (normalized < min) {
+    return min;
+  }
+  if (normalized > max) {
+    return max;
+  }
+  return normalized;
+}

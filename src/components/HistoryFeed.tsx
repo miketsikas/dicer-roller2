@@ -3,6 +3,7 @@ import type { FeedItem, RollEntry } from '../types';
 import { poolsToReadableLabel } from '../lib/dice';
 
 interface HistoryFeedProps {
+  density?: 'regular' | 'compact' | 'tiny';
   items: FeedItem[];
   mutedAliases: string[];
   hasMore: boolean;
@@ -16,9 +17,11 @@ function entryDetails(entry: RollEntry): string {
   return `${label}${modifierLabel}`;
 }
 
-export function HistoryFeed({ items, mutedAliases, hasMore, loadingMore, onLoadMore }: HistoryFeedProps): JSX.Element {
+export function HistoryFeed({ density = 'regular', items, mutedAliases, hasMore, loadingMore, onLoadMore }: HistoryFeedProps): JSX.Element {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [expandedBursts, setExpandedBursts] = useState<Record<string, boolean>>({});
+  const compact = density !== 'regular';
+  const tiny = density === 'tiny';
 
   const mutedSet = useMemo(
     () => new Set(mutedAliases.map((alias) => alias.trim().toLowerCase())),
@@ -34,16 +37,17 @@ export function HistoryFeed({ items, mutedAliases, hasMore, loadingMore, onLoadM
   };
 
   return (
-    <section className="panel history-panel">
+    <section className={`panel history-panel density-${density}`}>
       <h2>Roll History</h2>
-      <p className="panel-subtitle">Newest first. Long roll details and duplicate bursts can be expanded inline.</p>
+      {!compact ? <p className="panel-subtitle">Newest first. Long roll details and duplicate bursts can be expanded inline.</p> : null}
 
       <div className="history-scroll">
         <ul className="history-list" aria-label="Roll history feed">
           {items.map((item) => {
             const entry = item.primary;
             const details = entryDetails(entry);
-            const longDetails = details.length > 140;
+            const detailsLimit = tiny ? 72 : compact ? 96 : 140;
+            const longDetails = details.length > detailsLimit;
             const isExpanded = !!expandedRows[entry.id];
             const isMuted = mutedSet.has(entry.playerAlias.trim().toLowerCase());
             const burstExpanded = !!expandedBursts[entry.id];
@@ -52,7 +56,7 @@ export function HistoryFeed({ items, mutedAliases, hasMore, loadingMore, onLoadM
               <li key={entry.id} className={`history-item ${entry.secret ? 'secret' : ''} ${isMuted ? 'muted' : ''}`}>
                 <header>
                   <strong>{entry.playerAlias}</strong>
-                  <span>{entry.roomName}</span>
+                  {!tiny ? <span>{entry.roomName}</span> : null}
                   <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
                 </header>
 
@@ -64,19 +68,25 @@ export function HistoryFeed({ items, mutedAliases, hasMore, loadingMore, onLoadM
                 <p className="muted-text">{entry.formula ? `Formula: ${entry.formula}` : `Source: ${entry.source}`}</p>
 
                 <p className="mono">
-                  {longDetails && !isExpanded ? `${details.slice(0, 140)}...` : details}
+                  {longDetails && !isExpanded ? `${details.slice(0, detailsLimit)}...` : details}
                 </p>
 
                 <div className="row wrap gap-sm">
                   {longDetails ? (
                     <button type="button" onClick={() => toggleRow(entry.id)}>
-                      {isExpanded ? 'Show less' : 'Show more'}
+                      {isExpanded ? (compact ? 'Less' : 'Show less') : compact ? 'More' : 'Show more'}
                     </button>
                   ) : null}
 
                   {item.duplicates.length > 0 ? (
                     <button type="button" onClick={() => toggleBurst(entry.id)}>
-                      {burstExpanded ? 'Hide burst entries' : `Show ${item.duplicates.length} burst entries`}
+                      {burstExpanded
+                        ? compact
+                          ? 'Hide Burst'
+                          : 'Hide burst entries'
+                        : compact
+                          ? `Burst x${item.duplicates.length}`
+                          : `Show ${item.duplicates.length} burst entries`}
                     </button>
                   ) : null}
                 </div>
@@ -100,7 +110,7 @@ export function HistoryFeed({ items, mutedAliases, hasMore, loadingMore, onLoadM
       </div>
       {hasMore ? (
         <button type="button" onClick={onLoadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading...' : 'Load more (100 older)'}
+          {loadingMore ? 'Loading...' : compact ? 'Load 100 more' : 'Load more (100 older)'}
         </button>
       ) : null}
     </section>
