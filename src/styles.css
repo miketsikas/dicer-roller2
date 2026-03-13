@@ -806,10 +806,10 @@ main.app-shell.ui-theme-obsidian .hero-metric-card-accent {
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
-  row-gap: 0.8rem;
+  row-gap: 0.68rem;
   column-gap: 0;
   min-height: 120px;
-  padding: 0.45rem;
+  padding: 0.79rem 0.45rem;
   border-radius: 22px;
   border: 1px solid rgba(114, 163, 218, 0.16);
   background:
@@ -1116,7 +1116,13 @@ body.layout-pointer-resizing * {
 }
 
 .workspace-window.unlocked:hover {
-  outline-color: rgba(129, 200, 255, 0.52);
+  outline-color: transparent;
+}
+
+.workspace-window .panel:hover {
+  border-color: var(--panel-border-strong);
+  transform: none;
+  box-shadow: var(--shadow);
 }
 
 .workspace-cell.sizing-mode {
