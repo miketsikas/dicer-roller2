@@ -23,6 +23,8 @@ import { RollComposer } from './components/RollComposer';
 import { BACKGROUNDS } from './constants/backgrounds';
 import { useAppData } from './hooks/useAppData';
 import { buildCountsLabel, buildSpamKey, createEmptyCounts, groupFeedEntries, rollCounts, rollRandomBatchTemplate } from './lib/dice';
+import { downloadTextFile } from './lib/download';
+import { parseImportedSession } from './lib/exporters';
 import { evaluateFormula } from './lib/formula';
 import {
   cloneCharacterModifiers,
@@ -157,6 +159,18 @@ interface DragTargetState {
     side: 'left' | 'right';
     width: number;
     anchorWidth?: number;
+  };
+}
+
+interface SetupTransferPayloadV1 {
+  type: 'dicer.setup';
+  version: 1;
+  exportedAt: string;
+  appData: unknown;
+  composer?: {
+    counts?: unknown;
+    formula?: unknown;
+    secretRoll?: unknown;
   };
 }
 
@@ -497,6 +511,31 @@ function isKnownDieSides(value: number): value is (typeof DICE_SIDES)[number] {
   return (DICE_SIDES as readonly number[]).includes(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
+function isSetupTransferPayload(value: unknown): value is SetupTransferPayloadV1 {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.type === 'dicer.setup' && value.version === 1 && typeof value.exportedAt === 'string' && 'appData' in value;
+}
+
+function sanitizeImportedCounts(rawCounts: unknown): DiceCounts {
+  const next = createEmptyCounts();
+  if (!isRecord(rawCounts)) {
+    return next;
+  }
+
+  for (const sides of DICE_SIDES) {
+    const value = rawCounts[String(sides)];
+    next[sides] = sanitizePositiveInt(typeof value === 'number' ? value : 0, 1000);
+  }
+
+  return next;
+}
+
 function countsFromPools(pools: RollEntry['dicePools']): DiceCounts {
   const counts = createEmptyCounts();
   for (const pool of pools) {
@@ -705,6 +744,77 @@ export default function App(): JSX.Element {
     setLocalError(null);
     setStatusMessage(null);
   }, []);
+
+  const exportSetupJson = useCallback((): void => {
+    if (!data) {
+      return;
+    }
+
+    clearMessages();
+    const payload: SetupTransferPayloadV1 = {
+      type: 'dicer.setup',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appData: data,
+      composer: {
+        counts,
+        formula,
+        secretRoll
+      }
+    };
+    const timestamp = payload.exportedAt.replace(/[:.]/g, '-');
+    downloadTextFile(`dicer-setup-${timestamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    setStatusMessage('Setup exported as JSON.');
+  }, [clearMessages, counts, data, formula, secretRoll]);
+
+  const importSetupJson = useCallback(
+    async (file: File): Promise<void> => {
+      if (!data) {
+        return;
+      }
+
+      clearMessages();
+      try {
+        const raw = await file.text();
+        const parsed = JSON.parse(raw) as unknown;
+
+        let importedData: AppData;
+        let importedCounts = counts;
+        let importedFormula = formula;
+        let importedSecret = secretRoll;
+
+        if (isSetupTransferPayload(parsed)) {
+          importedData = parseImportedSession(JSON.stringify(parsed.appData));
+          importedCounts = sanitizeImportedCounts(parsed.composer?.counts);
+          importedFormula = typeof parsed.composer?.formula === 'string' ? parsed.composer.formula : '';
+          importedSecret =
+            typeof parsed.composer?.secretRoll === 'boolean' ? parsed.composer.secretRoll : importedData.preferences.defaultSecret;
+        } else {
+          importedData = parseImportedSession(raw);
+          importedCounts = createEmptyCounts();
+          importedFormula = '';
+          importedSecret = importedData.preferences.defaultSecret;
+        }
+
+        commit((previous) => ({
+          ...previous,
+          preferences: importedData.preferences,
+          characterModifiers: importedData.characterModifiers,
+          modifierSetups: importedData.modifierSetups,
+          activeModifierSetupId: importedData.activeModifierSetupId,
+          workspaceLayout: importedData.workspaceLayout,
+          presets: importedData.presets
+        }));
+        setCounts(importedCounts);
+        setFormula(importedFormula);
+        setSecretRoll(importedSecret);
+        setStatusMessage('Setup imported from JSON.');
+      } catch (importError) {
+        setLocalError(`Failed to import setup: ${(importError as Error).message}`);
+      }
+    },
+    [clearMessages, commit, counts, data, formula, secretRoll]
+  );
 
   const refreshAvailableRooms = useCallback(
     async (silent = false): Promise<void> => {
@@ -1105,6 +1215,13 @@ export default function App(): JSX.Element {
     if (!data.preferences.guidedSetupCompleted) {
       setShowGuide(true);
       setGuideStepIndex(0);
+      commit((previous) => ({
+        ...previous,
+        preferences: {
+          ...previous.preferences,
+          guidedSetupCompleted: true
+        }
+      }));
     }
 
     const share = parseShareParams(window.location.search);
@@ -2901,6 +3018,10 @@ export default function App(): JSX.Element {
       onLeave={() => {
         void leaveConnectedRoom();
       }}
+      onExportSetupJson={exportSetupJson}
+      onImportSetupJson={(file) => {
+        void importSetupJson(file);
+      }}
     />
   );
 
@@ -3044,6 +3165,7 @@ export default function App(): JSX.Element {
           modifierSetups={data.modifierSetups}
           activeModifierSetupId={data.activeModifierSetupId}
           secretRoll={secretRoll}
+          useDiceImages={data.preferences.useDiceImages}
           onCountChange={(sides, value) => {
             setCounts((previous) => ({
               ...previous,
@@ -3056,6 +3178,15 @@ export default function App(): JSX.Element {
           onModifierSetupChange={selectModifierSetup}
           onInsertModifier={insertFormulaModifier}
           onSecretRollChange={(value) => setSecretRoll(value)}
+          onUseDiceImagesChange={(value) => {
+            commit((previous) => ({
+              ...previous,
+              preferences: {
+                ...previous.preferences,
+                useDiceImages: value
+              }
+            }));
+          }}
           onRoll={() => runRoll({ source: 'manual', useFormula: false })}
           onRollFormula={() => runRoll({ source: 'formula', useFormula: true })}
           onReset={() => {

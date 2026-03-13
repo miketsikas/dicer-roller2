@@ -73,6 +73,9 @@ export function parseImportedSession(raw: string): AppData {
   if (typeof parsed.preferences.mobileQuickRoll !== 'boolean') {
     parsed.preferences.mobileQuickRoll = true;
   }
+  if (typeof parsed.preferences.useDiceImages !== 'boolean') {
+    parsed.preferences.useDiceImages = true;
+  }
 
   for (const entry of parsed.rollHistory) {
     if (!entry.roomCode) {

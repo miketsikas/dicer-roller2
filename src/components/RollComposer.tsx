@@ -1,6 +1,13 @@
 import type { CSSProperties } from 'react';
 import { DICE_SIDES, type CharacterModifiers, type DiceCounts, type ModifierSetup, type SaveKey, type StatKey } from '../types';
 import { InfoHint } from './InfoHint';
+import d4Icon from '../assets/dice/d4.png';
+import d6Icon from '../assets/dice/d6.png';
+import d8Icon from '../assets/dice/d8.png';
+import d10Icon from '../assets/dice/d10.png';
+import d12Icon from '../assets/dice/d12.png';
+import d20Icon from '../assets/dice/d20.png';
+import d100Icon from '../assets/dice/d100.png';
 
 interface RollComposerProps {
   density?: 'regular' | 'compact' | 'tiny';
@@ -10,11 +17,13 @@ interface RollComposerProps {
   modifierSetups: ModifierSetup[];
   activeModifierSetupId: string;
   secretRoll: boolean;
+  useDiceImages: boolean;
   onCountChange: (sides: (typeof DICE_SIDES)[number], value: number) => void;
   onFormulaChange: (value: string) => void;
   onModifierSetupChange: (setupId: string) => void;
   onInsertModifier: (key: StatKey | SaveKey, label: string) => void;
   onSecretRollChange: (value: boolean) => void;
+  onUseDiceImagesChange: (value: boolean) => void;
   onRoll: () => void;
   onRollFormula: () => void;
   onReset: () => void;
@@ -74,6 +83,16 @@ const DIE_PILL_COLORS: Record<
   }
 };
 
+const DIE_PILL_ICONS: Record<(typeof DICE_SIDES)[number], string> = {
+  4: d4Icon,
+  6: d6Icon,
+  8: d8Icon,
+  10: d10Icon,
+  12: d12Icon,
+  20: d20Icon,
+  100: d100Icon
+};
+
 function signed(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
 }
@@ -93,11 +112,13 @@ export function RollComposer({
   modifierSetups,
   activeModifierSetupId,
   secretRoll,
+  useDiceImages,
   onCountChange,
   onFormulaChange,
   onModifierSetupChange,
   onInsertModifier,
   onSecretRollChange,
+  onUseDiceImagesChange,
   onRoll,
   onRollFormula,
   onReset
@@ -110,9 +131,10 @@ export function RollComposer({
   const activeSetupName = activeSetup?.name ?? 'Setup';
   const formulaSummaryLabel = tiny ? 'Formula' : compact ? 'Formula Mode' : 'Formula Mode (optional)';
   const formulaStatusLabel = hasFormula ? 'Ready' : compact ? 'Optional' : 'Optional';
+  const diceLabelModeClass = useDiceImages ? 'dice-label-mode-icons' : 'dice-label-mode-text';
 
   return (
-    <section className={`panel roll-composer density-${density}`}>
+    <section className={`panel roll-composer density-${density} ${diceLabelModeClass}`}>
       <div className="panel-header-row">
         <div>
           <div className="panel-title-row">
@@ -138,37 +160,60 @@ export function RollComposer({
       <div className="dice-grid">
         {DICE_SIDES.map((sides) => {
           const pillStyle = DIE_PILL_COLORS[sides];
+          const pillIcon = DIE_PILL_ICONS[sides];
+          const count = counts[sides];
           return (
-          <label
-            key={sides}
-            htmlFor={`dice-${sides}`}
-            className="dice-input"
-            style={
-              {
-                '--dice-pill-background': pillStyle.background,
-                '--dice-pill-border': pillStyle.border
-              } as CSSProperties
-            }
-          >
-            <span className="dice-input-label dice-input-pill">d{sides}</span>
-            <input
-              id={`dice-${sides}`}
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={1000}
-              value={counts[sides]}
-              onChange={(event) => onCountChange(sides, clampDiceCount(Number.parseInt(event.target.value, 10) || 0))}
-              onBlur={(event) => onCountChange(sides, clampDiceCount(Number.parseInt(event.target.value, 10) || 0))}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  onRoll();
-                }
-              }}
-              aria-label={`Quantity for d${sides}`}
-            />
-          </label>
+            <div
+              key={sides}
+              className="dice-input"
+              style={
+                {
+                  '--dice-pill-background': pillStyle.background,
+                  '--dice-pill-border': pillStyle.border
+                } as CSSProperties
+              }
+            >
+              <div className="dice-input-pill">
+                <button
+                  type="button"
+                  className="dice-pill-stepper"
+                  onClick={() => onCountChange(sides, clampDiceCount(count - 1))}
+                  aria-label={`Decrease d${sides} quantity`}
+                  disabled={count <= MIN_DICE}
+                >
+                  -
+                </button>
+                <span className={`dice-input-label ${!useDiceImages && sides >= 100 ? 'dice-input-label-long' : ''}`}>
+                  {useDiceImages ? <img src={pillIcon} alt={`d${sides}`} className="dice-input-icon" /> : `d${sides}`}
+                </span>
+                <button
+                  type="button"
+                  className="dice-pill-stepper"
+                  onClick={() => onCountChange(sides, clampDiceCount(count + 1))}
+                  aria-label={`Increase d${sides} quantity`}
+                  disabled={count >= MAX_DICE}
+                >
+                  +
+                </button>
+              </div>
+              <input
+                id={`dice-${sides}`}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={1000}
+                value={count}
+                onChange={(event) => onCountChange(sides, clampDiceCount(Number.parseInt(event.target.value, 10) || 0))}
+                onBlur={(event) => onCountChange(sides, clampDiceCount(Number.parseInt(event.target.value, 10) || 0))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    onRoll();
+                  }
+                }}
+                aria-label={`Quantity for d${sides}`}
+              />
+            </div>
           );
         })}
       </div>
@@ -287,6 +332,15 @@ export function RollComposer({
             onChange={(event) => onSecretRollChange(event.target.checked)}
           />
           {tiny ? 'Secret' : 'Secret roll'}
+        </label>
+        <label className="inline-toggle" htmlFor="dice-image-toggle">
+          <input
+            id="dice-image-toggle"
+            type="checkbox"
+            checked={useDiceImages}
+            onChange={(event) => onUseDiceImagesChange(event.target.checked)}
+          />
+          {tiny ? 'Icons' : 'Dice icons'}
         </label>
       </div>
 

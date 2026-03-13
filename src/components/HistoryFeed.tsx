@@ -176,6 +176,7 @@ export function HistoryFeed({
             const isExpanded = !!expandedRows[entry.id];
             const isMuted = mutedSet.has(entry.playerAlias.trim().toLowerCase());
             const burstExpanded = !!expandedBursts[entry.id];
+            const burstEntries = item.duplicates;
             const isMine = entry.playerAlias.trim().toLowerCase() === activeAlias;
             const screenReaderSummary = `${entry.playerAlias} rolled total ${entry.total}${entry.secret ? ' in secret' : ' in public'}${entry.formula ? ` with formula ${entry.formula}` : ''}${item.duplicates.length > 0 ? ` and ${item.duplicates.length} burst duplicates` : ''}`;
 
@@ -224,11 +225,17 @@ export function HistoryFeed({
 
                 {burstExpanded && item.duplicates.length > 0 ? (
                   <ul className="duplicate-list">
-                    {item.duplicates.map((duplicate) => (
+                    {burstEntries.map((duplicate, index) => (
                       <li key={duplicate.id}>
-                        <span>{new Date(duplicate.timestamp).toLocaleTimeString()}</span>
-                        <span>Total {duplicate.total}</span>
-                        <span className="mono">{poolsToReadableLabel(duplicate.dicePools)}</span>
+                        <div className="duplicate-summary">
+                          <strong className="duplicate-roll-index">{burstEntries.length - index}</strong>
+                          <span className="duplicate-divider" aria-hidden="true">
+                            |
+                          </span>
+                          <span>Total {duplicate.total}</span>
+                          <span className="duplicate-time">{new Date(duplicate.timestamp).toLocaleTimeString()}</span>
+                        </div>
+                        <span className="mono duplicate-details">{poolsToReadableLabel(duplicate.dicePools)}</span>
                       </li>
                     ))}
                   </ul>

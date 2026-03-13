@@ -42,6 +42,7 @@ export interface Preferences {
   roomName: string;
   roomCode: string;
   defaultSecret: boolean;
+  useDiceImages: boolean;
   backgroundId: string;
   autoCarousel: boolean;
   rngMode: RngMode;

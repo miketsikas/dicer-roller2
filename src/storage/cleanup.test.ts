@@ -38,6 +38,7 @@ function mockData(updatedAt: number): AppData {
       roomName: 'Room',
       roomCode: 'ROOM-1',
       defaultSecret: false,
+      useDiceImages: true,
       backgroundId: 'forge',
       autoCarousel: true,
       rngMode: 'crypto',

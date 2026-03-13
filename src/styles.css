@@ -1768,6 +1768,10 @@ label:has(input[type='checkbox']) {
   gap: 0.6rem;
 }
 
+.roll-composer.dice-label-mode-icons .dice-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .dice-input {
   display: flex;
   flex-direction: column;
@@ -1794,18 +1798,151 @@ label:has(input[type='checkbox']) {
 }
 
 .dice-input-pill {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.22rem;
   width: 100%;
-  min-height: 1.42rem;
+  min-height: 1.58rem;
   align-items: center;
-  justify-content: center;
+  padding: 0.08rem 0.16rem;
   text-align: center;
   line-height: 1;
+  box-sizing: border-box;
+  overflow: hidden;
   border-radius: 999px;
   border: 1px solid var(--dice-pill-border, rgba(167, 223, 255, 0.86));
   background: var(--dice-pill-background, linear-gradient(145deg, rgba(129, 190, 255, 0.96), rgba(70, 130, 210, 0.94)));
   color: rgba(6, 18, 35, 0.94);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16), 0 8px 14px rgba(6, 16, 29, 0.28);
+}
+
+.roll-composer.dice-label-mode-icons .dice-input-pill {
+  min-height: 3.16rem;
+  padding: 0.14rem 0.2rem;
+}
+
+.dice-input-pill .dice-input-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  font-size: clamp(0.72rem, 1.02vw, 0.88rem);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dice-input-pill .dice-input-label.dice-input-label-long {
+  font-size: clamp(0.62rem, 0.88vw, 0.76rem);
+  letter-spacing: 0.01em;
+}
+
+.dice-input-icon {
+  width: clamp(0.96rem, 1.62vw, 1.28rem);
+  height: clamp(0.96rem, 1.62vw, 1.28rem);
+  display: block;
+  object-fit: contain;
+  filter: saturate(1.14) contrast(1.12) drop-shadow(0 1px 1px rgba(4, 12, 24, 0.42));
+  transition: transform 120ms var(--ease-out), filter 120ms var(--ease-out);
+  pointer-events: none;
+  user-select: none;
+}
+
+.roll-composer.dice-label-mode-icons .dice-input-icon {
+  width: clamp(1.62rem, 2.7vw, 2.22rem);
+  height: clamp(1.62rem, 2.7vw, 2.22rem);
+}
+
+.dice-input:hover .dice-input-icon {
+  transform: scale(1.06);
+  filter: saturate(1.18) contrast(1.15) drop-shadow(0 1px 2px rgba(4, 12, 24, 0.48));
+}
+
+.dice-pill-stepper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(0.86rem, 1.38vw, 1.08rem);
+  min-width: clamp(0.86rem, 1.38vw, 1.08rem);
+  height: clamp(0.86rem, 1.38vw, 1.08rem);
+  min-height: clamp(0.86rem, 1.38vw, 1.08rem);
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(7, 18, 36, 0.34);
+  background: rgba(255, 255, 255, 0.24);
+  color: rgba(7, 18, 36, 0.98);
+  box-shadow: none;
+  font-size: clamp(0.66rem, 0.96vw, 0.82rem);
+  font-weight: 900;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.roll-composer.dice-label-mode-icons .dice-pill-stepper {
+  width: clamp(1.18rem, 2.2vw, 1.62rem);
+  min-width: clamp(1.18rem, 2.2vw, 1.62rem);
+  height: clamp(1.18rem, 2.2vw, 1.62rem);
+  min-height: clamp(1.18rem, 2.2vw, 1.62rem);
+  font-size: clamp(0.84rem, 1.32vw, 1.06rem);
+}
+
+.roll-composer.density-tiny .dice-input-pill {
+  min-height: 1.5rem;
+}
+
+.roll-composer.density-tiny.dice-label-mode-icons .dice-input-pill {
+  min-height: 3rem;
+}
+
+.roll-composer.density-tiny .dice-input-icon {
+  width: 0.94rem;
+  height: 0.94rem;
+}
+
+.roll-composer.density-tiny.dice-label-mode-icons .dice-input-icon {
+  width: 1.58rem;
+  height: 1.58rem;
+}
+
+.roll-composer.density-tiny .dice-input-pill .dice-input-label {
+  font-size: 0.72rem;
+}
+
+.roll-composer.density-tiny .dice-input-pill .dice-input-label.dice-input-label-long {
+  font-size: 0.65rem;
+}
+
+.roll-composer.density-tiny .dice-pill-stepper {
+  width: 0.96rem;
+  min-width: 0.96rem;
+  height: 0.96rem;
+  min-height: 0.96rem;
+  font-size: 0.7rem;
+}
+
+.roll-composer.density-tiny.dice-label-mode-icons .dice-pill-stepper {
+  width: 1.24rem;
+  min-width: 1.24rem;
+  height: 1.24rem;
+  min-height: 1.24rem;
+  font-size: 0.88rem;
+}
+
+.dice-pill-stepper:hover:not(:disabled) {
+  transform: none;
+  border-color: rgba(7, 18, 36, 0.5);
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: none;
+}
+
+.dice-pill-stepper:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.dice-pill-stepper:disabled {
+  opacity: 0.5;
 }
 
 .dice-input input[type='number'] {
@@ -2604,13 +2741,38 @@ label:has(input[type='checkbox']) {
 }
 
 .duplicate-list li {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  gap: 0.4rem;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
   font-size: 0.85rem;
   border-top: 1px dashed rgba(105, 174, 241, 0.46);
   padding-top: 0.35rem;
+}
+
+.duplicate-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.duplicate-roll-index {
+  min-width: 1.1rem;
+  text-align: center;
+}
+
+.duplicate-divider {
+  color: rgba(167, 200, 235, 0.85);
+  font-weight: 800;
+}
+
+.duplicate-time {
+  margin-left: auto;
+  color: rgba(206, 226, 247, 0.94);
+  font-variant-numeric: tabular-nums;
+}
+
+.duplicate-details {
+  color: rgba(177, 205, 234, 0.92);
 }
 
 .two-col {
@@ -2667,6 +2829,28 @@ label:has(input[type='checkbox']) {
   justify-content: center;
   text-align: center;
   min-height: 2.4rem;
+}
+
+.player-room-setup-transfer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.48rem;
+}
+
+.player-room-setup-actions {
+  align-items: flex-end;
+}
+
+.player-room-setup-import-field {
+  display: flex;
+  flex: 1 1 260px;
+  min-width: 240px;
+  flex-direction: column;
+  gap: 0.32rem;
+}
+
+.player-room-setup-import-field input[type='file'] {
+  width: 100%;
 }
 
 .presence-list {
@@ -3466,13 +3650,56 @@ body.reduce-motion *::after {
     gap: 0.46rem;
   }
 
+  .workspace-cell.mobile-active-cell .roll-composer.dice-label-mode-icons .dice-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .workspace-cell.mobile-active-cell .dice-input {
     padding: 0.34rem;
     gap: 0.28rem;
   }
 
+  .workspace-cell.mobile-active-cell .roll-composer.dice-label-mode-icons .dice-input-pill {
+    min-height: 2.85rem;
+  }
+
   .workspace-cell.mobile-active-cell .dice-input-label {
-    font-size: 0.82rem;
+    font-size: 0.74rem;
+  }
+
+  .workspace-cell.mobile-active-cell .dice-input-pill .dice-input-label {
+    min-width: 0;
+  }
+
+  .workspace-cell.mobile-active-cell .dice-input-pill .dice-input-label.dice-input-label-long {
+    font-size: 0.66rem;
+  }
+
+  .workspace-cell.mobile-active-cell .dice-input-icon {
+    width: 0.88rem;
+    height: 0.88rem;
+  }
+
+  .workspace-cell.mobile-active-cell .roll-composer.dice-label-mode-icons .dice-input-icon {
+    width: 1.42rem;
+    height: 1.42rem;
+  }
+
+  .workspace-cell.mobile-active-cell .panel .dice-pill-stepper {
+    width: 0.96rem;
+    min-width: 0.96rem;
+    height: 0.96rem;
+    min-height: 0.96rem;
+    padding: 0;
+    font-size: 0.68rem;
+  }
+
+  .workspace-cell.mobile-active-cell .roll-composer.dice-label-mode-icons .dice-pill-stepper {
+    width: 1.18rem;
+    min-width: 1.18rem;
+    height: 1.18rem;
+    min-height: 1.18rem;
+    font-size: 0.84rem;
   }
 
   .workspace-cell.mobile-active-cell .formula-shell summary,
@@ -3741,6 +3968,10 @@ body.reduce-motion *::after {
 
   .dice-grid {
     grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .roll-composer.dice-label-mode-icons .dice-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .quick-grid {

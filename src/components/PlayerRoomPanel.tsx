@@ -19,6 +19,8 @@ interface PlayerRoomPanelProps {
   onRefreshRooms: () => void;
   onJoin: () => void;
   onLeave: () => void;
+  onExportSetupJson: () => void;
+  onImportSetupJson: (file: File) => void;
 }
 
 export function PlayerRoomPanel({
@@ -38,7 +40,9 @@ export function PlayerRoomPanel({
   onSelectExistingRoom,
   onRefreshRooms,
   onJoin,
-  onLeave
+  onLeave,
+  onExportSetupJson,
+  onImportSetupJson
 }: PlayerRoomPanelProps): JSX.Element {
   const isConnected = !!connectedRoomCode;
 
@@ -133,6 +137,37 @@ export function PlayerRoomPanel({
         <span className={`badge ${authUserId ? 'badge-positive' : 'badge-neutral'}`}>Auth: {authUserId ? 'Ready' : 'Not ready'}</span>
         <span className={`badge ${connectedRoomCode ? 'badge-positive' : 'badge-neutral'}`}>Room: {connectedRoomCode ? connectedRoomCode : 'Not connected'}</span>
         <span className="badge">Presence: {members.length}</span>
+      </div>
+
+      <div className="panel-slab player-room-setup-transfer">
+        <div className="panel-title-row">
+          <h3>Setup Backup</h3>
+          <InfoHint
+            text="Export or import your HUD layout, stats/saves setups, current formula+dice inputs, and presets as JSON."
+            label="About setup backup"
+          />
+        </div>
+        <div className="row wrap gap-sm player-room-setup-actions">
+          <button type="button" onClick={onExportSetupJson}>
+            Export Setup JSON
+          </button>
+          <div className="player-room-setup-import-field">
+            <label htmlFor="player-setup-import">Import Setup JSON</label>
+            <input
+              id="player-setup-import"
+              type="file"
+              accept="application/json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  onImportSetupJson(file);
+                }
+                event.target.value = '';
+              }}
+            />
+          </div>
+        </div>
+        <p className="muted-text">Import updates local setup only and keeps your roll history intact.</p>
       </div>
 
       {!realtimeReady ? (
