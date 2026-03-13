@@ -42,5 +42,29 @@ describe('storage manager', () => {
     expect(backend.files.has('client-old-client.json')).toBe(false);
     expect(loaded.fileName).not.toBe('client-old-client.json');
     expect(loaded.data.createdAt).toBe(now);
+    expect(loaded.data.modifierSetups).toHaveLength(1);
+    expect(loaded.data.activeModifierSetupId).toBe(loaded.data.modifierSetups[0].id);
+  });
+
+  test('legacy modifier data migrates into a named setup and active modifiers stay synced', async () => {
+    const now = Date.now();
+    const backend = new MemoryBackend();
+    const legacy = createDefaultData('legacy-client', now);
+
+    Reflect.deleteProperty(legacy as unknown as Record<string, unknown>, 'modifierSetups');
+    Reflect.deleteProperty(legacy as unknown as Record<string, unknown>, 'activeModifierSetupId');
+    legacy.characterModifiers.stats.dex.base = 3;
+    legacy.characterModifiers.saves.will.temp = 2;
+
+    backend.files.set('client-legacy-client.json', legacy);
+
+    const manager = new StorageManager(backend);
+    const loaded = await manager.loadOrCreate(now);
+
+    expect(loaded.data.modifierSetups).toHaveLength(1);
+    expect(loaded.data.modifierSetups[0].name).toBe('Default Setup');
+    expect(loaded.data.activeModifierSetupId).toBe(loaded.data.modifierSetups[0].id);
+    expect(loaded.data.characterModifiers.stats.dex.base).toBe(3);
+    expect(loaded.data.modifierSetups[0].modifiers.saves.will.temp).toBe(2);
   });
 });

@@ -1,13 +1,18 @@
-import { DICE_SIDES, type CharacterModifiers, type DiceCounts, type SaveKey, type StatKey } from '../types';
+import type { CSSProperties } from 'react';
+import { DICE_SIDES, type CharacterModifiers, type DiceCounts, type ModifierSetup, type SaveKey, type StatKey } from '../types';
+import { InfoHint } from './InfoHint';
 
 interface RollComposerProps {
   density?: 'regular' | 'compact' | 'tiny';
   counts: DiceCounts;
   formula: string;
   modifiers: CharacterModifiers;
+  modifierSetups: ModifierSetup[];
+  activeModifierSetupId: string;
   secretRoll: boolean;
   onCountChange: (sides: (typeof DICE_SIDES)[number], value: number) => void;
   onFormulaChange: (value: string) => void;
+  onModifierSetupChange: (setupId: string) => void;
   onInsertModifier: (key: StatKey | SaveKey, label: string) => void;
   onSecretRollChange: (value: boolean) => void;
   onRoll: () => void;
@@ -32,6 +37,42 @@ const SAVE_OPTIONS: Array<{ key: SaveKey; label: string }> = [
 
 const MIN_DICE = 0;
 const MAX_DICE = 1000;
+const DIE_PILL_COLORS: Record<
+  (typeof DICE_SIDES)[number],
+  {
+    background: string;
+    border: string;
+  }
+> = {
+  4: {
+    background: 'linear-gradient(145deg, rgba(255, 149, 143, 0.96), rgba(211, 86, 99, 0.94))',
+    border: 'rgba(255, 199, 197, 0.88)'
+  },
+  6: {
+    background: 'linear-gradient(145deg, rgba(255, 190, 111, 0.96), rgba(223, 138, 54, 0.94))',
+    border: 'rgba(255, 220, 170, 0.88)'
+  },
+  8: {
+    background: 'linear-gradient(145deg, rgba(251, 229, 118, 0.96), rgba(209, 168, 58, 0.94))',
+    border: 'rgba(255, 241, 185, 0.9)'
+  },
+  10: {
+    background: 'linear-gradient(145deg, rgba(127, 231, 164, 0.96), rgba(67, 174, 108, 0.94))',
+    border: 'rgba(183, 246, 207, 0.88)'
+  },
+  12: {
+    background: 'linear-gradient(145deg, rgba(121, 225, 240, 0.96), rgba(64, 160, 197, 0.94))',
+    border: 'rgba(180, 241, 250, 0.9)'
+  },
+  20: {
+    background: 'linear-gradient(145deg, rgba(129, 190, 255, 0.96), rgba(70, 130, 210, 0.94))',
+    border: 'rgba(192, 223, 255, 0.9)'
+  },
+  100: {
+    background: 'linear-gradient(145deg, rgba(198, 167, 255, 0.96), rgba(132, 97, 204, 0.94))',
+    border: 'rgba(227, 211, 255, 0.9)'
+  }
+};
 
 function signed(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
@@ -49,9 +90,12 @@ export function RollComposer({
   counts,
   formula,
   modifiers,
+  modifierSetups,
+  activeModifierSetupId,
   secretRoll,
   onCountChange,
   onFormulaChange,
+  onModifierSetupChange,
   onInsertModifier,
   onSecretRollChange,
   onRoll,
@@ -61,16 +105,52 @@ export function RollComposer({
   const hasFormula = formula.trim().length > 0;
   const compact = density !== 'regular';
   const tiny = density === 'tiny';
+  const totalDiceCount = DICE_SIDES.reduce((sum, sides) => sum + counts[sides], 0);
+  const activeSetup = modifierSetups.find((setup) => setup.id === activeModifierSetupId) ?? modifierSetups[0] ?? null;
+  const activeSetupName = activeSetup?.name ?? 'Setup';
   const formulaSummaryLabel = tiny ? 'Formula' : compact ? 'Formula Mode' : 'Formula Mode (optional)';
-  const formulaStatusLabel = hasFormula ? 'Ready' : compact ? 'Off' : 'Closed by default';
+  const formulaStatusLabel = hasFormula ? 'Ready' : compact ? 'Optional' : 'Optional';
 
   return (
     <section className={`panel roll-composer density-${density}`}>
-      <h2>{tiny ? 'Roll' : 'Dice Roller'}</h2>
+      <div className="panel-header-row">
+        <div>
+          <div className="panel-title-row">
+            <h2>{tiny ? 'Roll' : 'Dice Roller'}</h2>
+            <InfoHint
+              text="Blend manual dice pools with formulas and modifier tokens without leaving the current workspace."
+              label="About dice roller"
+            />
+          </div>
+        </div>
+        {!tiny ? (
+          <div className="panel-header-badges composer-header-badges">
+            <span className="badge">{activeSetupName}</span>
+            <span className="badge">{hasFormula ? 'Formula Ready' : 'Dice Pool Mode'}</span>
+          </div>
+        ) : null}
+      </div>
+      <div className="composer-status-row" role="status" aria-live="polite">
+        <span className="badge">Dice: {totalDiceCount}</span>
+        <span className="badge">{secretRoll ? 'Secret output' : 'Public output'}</span>
+        <span className={`badge ${hasFormula ? 'badge-accent' : ''}`}>{hasFormula ? 'Formula armed' : 'Manual dice only'}</span>
+      </div>
       <div className="dice-grid">
-        {DICE_SIDES.map((sides) => (
-          <label key={sides} htmlFor={`dice-${sides}`} className="dice-input">
-            <span className="dice-input-label">d{sides}</span>
+        {DICE_SIDES.map((sides) => {
+          const pillStyle = DIE_PILL_COLORS[sides];
+          return (
+          <label
+            key={sides}
+            htmlFor={`dice-${sides}`}
+            className="dice-input"
+            style={
+              {
+                '--dice-pill-background': pillStyle.background,
+                '--dice-pill-border': pillStyle.border
+              } as CSSProperties
+            }
+          >
+            <span className="dice-input-label dice-input-pill">d{sides}</span>
             <input
               id={`dice-${sides}`}
               type="number"
@@ -89,16 +169,37 @@ export function RollComposer({
               aria-label={`Quantity for d${sides}`}
             />
           </label>
-        ))}
+          );
+        })}
       </div>
 
       <div className="formula-scroll-shell">
         <details className="formula-shell formula-mode-accordion">
           <summary>
             <span>{formulaSummaryLabel}</span>
-            <span className="formula-summary-meta">{formulaStatusLabel}</span>
+            <span className="formula-summary-meta">
+              {formulaStatusLabel} · {activeSetupName}
+            </span>
           </summary>
           <div className="formula-shell-body">
+            <div className="formula-setup-row">
+              <label htmlFor="modifier-setup-select">{tiny ? 'Setup' : 'Stat/save setup'}</label>
+              <select
+                id="modifier-setup-select"
+                value={activeModifierSetupId}
+                onChange={(event) => onModifierSetupChange(event.target.value)}
+                aria-label="Modifier setup used by formulas"
+              >
+                {modifierSetups.map((setup) => (
+                  <option key={setup.id} value={setup.id}>
+                    {setup.name}
+                  </option>
+                ))}
+              </select>
+              <p className="muted-text formula-setup-note">
+                {compact ? `Using ${activeSetupName}` : 'Modifier tokens resolve from the selected setup.'}
+              </p>
+            </div>
             <label htmlFor="formula-input">Formula</label>
             <input
               id="formula-input"

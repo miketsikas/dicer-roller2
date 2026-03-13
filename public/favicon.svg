@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Modern dice favicon">
+  <defs>
+    <linearGradient id="frame" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b2038" />
+      <stop offset="1" stop-color="#08131f" />
+    </linearGradient>
+    <radialGradient id="aura" cx="31%" cy="24%" r="72%">
+      <stop offset="0" stop-color="#62d8ff" stop-opacity=".3" />
+      <stop offset=".58" stop-color="#62d8ff" stop-opacity=".08" />
+      <stop offset="1" stop-color="#62d8ff" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="topFace" x1="22" y1="16" x2="42" y2="34" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#baf1ff" />
+      <stop offset="1" stop-color="#69cfff" />
+    </linearGradient>
+    <linearGradient id="leftFace" x1="16" y1="25" x2="33" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5fb8ff" />
+      <stop offset="1" stop-color="#2f79ca" />
+    </linearGradient>
+    <linearGradient id="rightFace" x1="32" y1="35" x2="48" y2="53" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4d9cf0" />
+      <stop offset="1" stop-color="#1f5ea7" />
+    </linearGradient>
+  </defs>
+
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#frame)" />
+  <rect x="4.5" y="4.5" width="55" height="55" rx="13.5" fill="url(#aura)" stroke="#79d6ff" stroke-opacity=".35" />
+
+  <path d="M18 26L32 16L46 26L32 36Z" fill="url(#topFace)" stroke="#e8fbff" stroke-opacity=".75" stroke-width="1.4" stroke-linejoin="round" />
+  <path d="M18 26L32 36V52L18 42Z" fill="url(#leftFace)" stroke="#9ed8ff" stroke-opacity=".72" stroke-width="1.4" stroke-linejoin="round" />
+  <path d="M46 26L32 36V52L46 42Z" fill="url(#rightFace)" stroke="#8ccfff" stroke-opacity=".7" stroke-width="1.4" stroke-linejoin="round" />
+
+  <g fill="#05203a">
+    <circle cx="32" cy="27" r="2.2" />
+    <circle cx="23.8" cy="33.4" r="1.9" />
+    <circle cx="27.7" cy="40.3" r="1.9" />
+    <circle cx="40.1" cy="33.4" r="1.75" />
+    <circle cx="35.8" cy="39.9" r="1.75" />
+    <circle cx="40.1" cy="46.3" r="1.75" />
+  </g>
+
+  <path d="M22.2 23.9L32 17.7L40.9 23.5" fill="none" stroke="#ffffff" stroke-opacity=".48" stroke-width="1.1" stroke-linecap="round" />
+</svg>

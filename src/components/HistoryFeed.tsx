@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { FeedItem, RollEntry } from '../types';
 import { poolsToReadableLabel } from '../lib/dice';
+import { InfoHint } from './InfoHint';
 
 export interface HistoryFilters {
   searchText: string;
@@ -43,6 +44,13 @@ export function HistoryFeed({
   const [expandedBursts, setExpandedBursts] = useState<Record<string, boolean>>({});
   const compact = density !== 'regular';
   const tiny = density === 'tiny';
+  const activeFilterCount =
+    Number(filters.mineOnly) +
+    Number(!filters.showPublic) +
+    Number(!filters.showSecret) +
+    Number(filters.formulaOnly) +
+    Number(filters.searchText.trim().length > 0);
+  const noVisibilityFilters = !filters.showPublic && !filters.showSecret;
 
   const mutedSet = useMemo(
     () => new Set(mutedAliases.map((alias) => alias.trim().toLowerCase())),
@@ -99,15 +107,36 @@ export function HistoryFeed({
 
   return (
     <section className={`panel history-panel density-${density}`}>
-      <h2>Roll History</h2>
-      {!compact ? <p className="panel-subtitle">Newest first. Long roll details and duplicate bursts can be expanded inline.</p> : null}
+      <div className="panel-header-row">
+        <div>
+          <div className="panel-title-row">
+            <h2>Roll History</h2>
+            <InfoHint
+              text="Newest first. Long roll details and duplicate bursts can be expanded inline."
+              label="About roll history"
+            />
+          </div>
+        </div>
+        {!tiny ? (
+          <div className="panel-header-badges">
+            <span className="badge">{items.length} visible</span>
+            {filters.formulaOnly ? <span className="badge">Formula filter</span> : null}
+            {activeFilterCount > 0 ? <span className="badge badge-accent">{activeFilterCount} active filters</span> : null}
+          </div>
+        ) : null}
+      </div>
       <div className="history-filter-row">
-        <button type="button" className={`filter-chip ${filters.mineOnly ? 'active' : ''}`} aria-pressed={filters.mineOnly} onClick={toggleMineOnly}>
+        <button
+          type="button"
+          className={`filter-chip filter-chip-mine ${filters.mineOnly ? 'active' : ''}`}
+          aria-pressed={filters.mineOnly}
+          onClick={toggleMineOnly}
+        >
           {mineLabel}
         </button>
         <button
           type="button"
-          className={`filter-chip ${filters.showPublic ? 'active' : ''}`}
+          className={`filter-chip filter-chip-public ${filters.showPublic ? 'active' : ''}`}
           aria-pressed={filters.showPublic}
           onClick={togglePublic}
         >
@@ -115,7 +144,7 @@ export function HistoryFeed({
         </button>
         <button
           type="button"
-          className={`filter-chip ${filters.showSecret ? 'active' : ''}`}
+          className={`filter-chip filter-chip-secret ${filters.showSecret ? 'active' : ''}`}
           aria-pressed={filters.showSecret}
           onClick={toggleSecret}
         >
@@ -123,7 +152,7 @@ export function HistoryFeed({
         </button>
         <button
           type="button"
-          className={`filter-chip ${filters.formulaOnly ? 'active' : ''}`}
+          className={`filter-chip filter-chip-formula ${filters.formulaOnly ? 'active' : ''}`}
           aria-pressed={filters.formulaOnly}
           onClick={toggleFormulaOnly}
         >
@@ -207,7 +236,14 @@ export function HistoryFeed({
               </li>
             );
           })}
-          {items.length === 0 ? <li className="muted-text">No matching rolls yet.</li> : null}
+          {items.length === 0 ? (
+            <li className="panel-slab history-empty-state">
+              <h3>{noVisibilityFilters ? 'Visibility filters are off' : 'No matching rolls yet'}</h3>
+              <p className="muted-text">
+                {noVisibilityFilters ? 'Enable Public or Secret to show results again.' : 'Try adjusting search text or toggles to widen the feed.'}
+              </p>
+            </li>
+          ) : null}
         </ul>
       </div>
       {hasMore ? (

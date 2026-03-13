@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ModalProps {
   title: string;
@@ -10,8 +11,13 @@ interface ModalProps {
 export function Modal({ title, onClose, children, className }: ModalProps): JSX.Element {
   const headingId = useId();
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
   const focusableSelector =
     'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -22,7 +28,7 @@ export function Modal({ title, onClose, children, className }: ModalProps): JSX.
 
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -65,22 +71,22 @@ export function Modal({ title, onClose, children, className }: ModalProps): JSX.
       window.removeEventListener('keydown', onKeyDown);
       previousFocus?.focus();
     };
-  }, [focusableSelector, onClose]);
+  }, [focusableSelector]);
 
-  return (
+  const modalMarkup = (
     <div
       className="modal-backdrop"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
-          onClose();
+          onCloseRef.current();
         }
       }}
     >
       <div className={`modal-shell ${className ?? ''}`.trim()} role="dialog" aria-modal="true" aria-labelledby={headingId} ref={shellRef} tabIndex={-1}>
         <header className="modal-header">
           <h2 id={headingId}>{title}</h2>
-          <button type="button" onClick={onClose} className="modal-close-btn" aria-label={`Close ${title}`}>
+          <button type="button" onClick={() => onCloseRef.current()} className="modal-close-btn" aria-label={`Close ${title}`}>
             Close
           </button>
         </header>
@@ -88,4 +94,10 @@ export function Modal({ title, onClose, children, className }: ModalProps): JSX.
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalMarkup;
+  }
+
+  return createPortal(modalMarkup, document.body);
 }

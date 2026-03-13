@@ -64,6 +64,29 @@ function mockData(updatedAt: number): AppData {
         will: { base: 0, temp: 0 }
       }
     },
+    modifierSetups: [
+      {
+        id: 'setup-a',
+        name: 'Default Setup',
+        modifiers: {
+          stats: {
+            str: { base: 0, temp: 0 },
+            dex: { base: 0, temp: 0 },
+            con: { base: 0, temp: 0 },
+            int: { base: 0, temp: 0 },
+            wis: { base: 0, temp: 0 },
+            cha: { base: 0, temp: 0 }
+          },
+          saves: {
+            fort: { base: 0, temp: 0 },
+            reflex: { base: 0, temp: 0 },
+            will: { base: 0, temp: 0 }
+          }
+        },
+        updatedAt
+      }
+    ],
+    activeModifierSetupId: 'setup-a',
     workspaceLayout: {
       locked: true,
       leftOrder: ['roomControl', 'presets', 'modifiers'],

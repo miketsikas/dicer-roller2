@@ -49,6 +49,17 @@ export function validatePresetName(name: string): string | null {
   return null;
 }
 
+export function validateModifierSetupName(name: string): string | null {
+  const value = name.trim();
+  if (value.length < 1) {
+    return 'Setup name is required.';
+  }
+  if (value.length > 32) {
+    return 'Setup name must be 32 characters or fewer.';
+  }
+  return null;
+}
+
 export function sanitizePositiveInt(value: string | number, max: number): number {
   const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 0) {

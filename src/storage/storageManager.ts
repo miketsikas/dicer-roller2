@@ -1,5 +1,11 @@
 import type { AppData, DiceCounts } from '../types';
 import { createEmptyCounts } from '../lib/dice';
+import {
+  cloneCharacterModifiers,
+  createEmptyCharacterModifiers,
+  DEFAULT_MODIFIER_SETUP_NAME,
+  suggestModifierSetupName
+} from '../lib/modifierSetups';
 import { createId } from '../lib/uuid';
 import type { ClientStorageBackend } from './backend';
 import { cleanupStaleClientFiles, isStale, shouldRunDailyCleanup } from './cleanup';
@@ -16,33 +22,31 @@ function defaultCounts(): DiceCounts {
   return createEmptyCounts();
 }
 
-const DEFAULT_STATS = {
-  str: { base: 0, temp: 0 },
-  dex: { base: 0, temp: 0 },
-  con: { base: 0, temp: 0 },
-  int: { base: 0, temp: 0 },
-  wis: { base: 0, temp: 0 },
-  cha: { base: 0, temp: 0 }
-} as const;
-
-const DEFAULT_SAVES = {
-  fort: { base: 0, temp: 0 },
-  reflex: { base: 0, temp: 0 },
-  will: { base: 0, temp: 0 }
-} as const;
-
 const DEFAULT_LAYOUT_LEFT = ['quickActions', 'history'] as const;
 const DEFAULT_LAYOUT_RIGHT = ['presets', 'rollComposer'] as const;
+const LEGACY_DEFAULT_WINDOW_HEIGHTS = [
+  {
+    quickActions: 360,
+    history: 360,
+    presets: 180,
+    rollComposer: 540
+  },
+  {
+    quickActions: 450,
+    history: 450,
+    presets: 270,
+    rollComposer: 630
+  }
+] as const;
+const DEFAULT_WINDOW_HEIGHTS = {
+  quickActions: 338,
+  history: 562,
+  presets: 338,
+  rollComposer: 562
+} as const;
 
 function defaultCharacterModifiers() {
-  return {
-    stats: {
-      ...DEFAULT_STATS
-    },
-    saves: {
-      ...DEFAULT_SAVES
-    }
-  };
+  return createEmptyCharacterModifiers();
 }
 
 function defaultWorkspaceLayout() {
@@ -54,7 +58,7 @@ function defaultWorkspaceLayout() {
     columnSplit: 45,
     sizesLocked: false,
     windowWidths: {},
-    windowHeights: {}
+    windowHeights: { ...DEFAULT_WINDOW_HEIGHTS }
   };
 }
 
@@ -62,7 +66,128 @@ function safeNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function isWorkspaceWindowId(value: string): value is keyof typeof DEFAULT_WINDOW_HEIGHTS {
+  return value in DEFAULT_WINDOW_HEIGHTS;
+}
+
+function isLegacyDefaultWindowHeights(heights: Record<string, number>): boolean {
+  const entries = Object.entries(heights).filter(
+    (entry): entry is [keyof typeof DEFAULT_WINDOW_HEIGHTS, number] => isWorkspaceWindowId(entry[0])
+  );
+  if (entries.length === 0) {
+    return true;
+  }
+  const allClassic = entries.every(([, value]) => Math.round(value) === 360);
+  if (allClassic) {
+    return true;
+  }
+  return LEGACY_DEFAULT_WINDOW_HEIGHTS.some((profile) => entries.every(([key, value]) => Math.round(value) === profile[key]));
+}
+
+function normalizeCharacterModifiers(rawValue: unknown) {
+  const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
+  const rawStats =
+    'stats' in raw && raw.stats && typeof raw.stats === 'object'
+      ? (raw.stats as Record<string, { base?: unknown; temp?: unknown }>)
+      : {};
+  const rawSaves =
+    'saves' in raw && raw.saves && typeof raw.saves === 'object'
+      ? (raw.saves as Record<string, { base?: unknown; temp?: unknown }>)
+      : {};
+
+  return {
+    stats: {
+      str: {
+        base: safeNumber(rawStats.str?.base),
+        temp: safeNumber(rawStats.str?.temp)
+      },
+      dex: {
+        base: safeNumber(rawStats.dex?.base),
+        temp: safeNumber(rawStats.dex?.temp)
+      },
+      con: {
+        base: safeNumber(rawStats.con?.base),
+        temp: safeNumber(rawStats.con?.temp)
+      },
+      int: {
+        base: safeNumber(rawStats.int?.base),
+        temp: safeNumber(rawStats.int?.temp)
+      },
+      wis: {
+        base: safeNumber(rawStats.wis?.base),
+        temp: safeNumber(rawStats.wis?.temp)
+      },
+      cha: {
+        base: safeNumber(rawStats.cha?.base),
+        temp: safeNumber(rawStats.cha?.temp)
+      }
+    },
+    saves: {
+      fort: {
+        base: safeNumber(rawSaves.fort?.base),
+        temp: safeNumber(rawSaves.fort?.temp)
+      },
+      reflex: {
+        base: safeNumber(rawSaves.reflex?.base),
+        temp: safeNumber(rawSaves.reflex?.temp)
+      },
+      will: {
+        base: safeNumber(rawSaves.will?.base),
+        temp: safeNumber(rawSaves.will?.temp)
+      }
+    }
+  };
+}
+
+function normalizeModifierSetups(rawValue: unknown, legacyModifiers: ReturnType<typeof normalizeCharacterModifiers>, fallbackUpdatedAt: number) {
+  const normalized = Array.isArray(rawValue)
+    ? rawValue.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return [];
+        }
+
+        const raw = entry as {
+          id?: unknown;
+          name?: unknown;
+          modifiers?: unknown;
+          updatedAt?: unknown;
+        };
+
+        const seed = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 32) : 'Setup';
+        return [
+          {
+            id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : createId('setup'),
+            name: seed,
+            modifiers: normalizeCharacterModifiers(raw.modifiers),
+            updatedAt: safeNumber(raw.updatedAt) || fallbackUpdatedAt
+          }
+        ];
+      })
+    : [];
+
+  const deduped = normalized.map((setup, index, setups) => ({
+    ...setup,
+    name: suggestModifierSetupName(setups.slice(0, index), setup.name || `Setup ${index + 1}`)
+  }));
+
+  if (deduped.length > 0) {
+    return deduped;
+  }
+
+  return [
+    {
+      id: createId('setup'),
+      name: DEFAULT_MODIFIER_SETUP_NAME,
+      modifiers: cloneCharacterModifiers(legacyModifiers),
+      updatedAt: fallbackUpdatedAt
+    }
+  ];
+}
+
 export function createDefaultData(clientId: string, now = Date.now()): AppData {
+  const modifierSetupId = createId('setup');
+  const modifiers = defaultCharacterModifiers();
+
   return {
     clientId,
     createdAt: now,
@@ -84,7 +209,16 @@ export function createDefaultData(clientId: string, now = Date.now()): AppData {
       resultFxHaptics: true,
       mobileQuickRoll: true
     },
-    characterModifiers: defaultCharacterModifiers(),
+    characterModifiers: modifiers,
+    modifierSetups: [
+      {
+        id: modifierSetupId,
+        name: DEFAULT_MODIFIER_SETUP_NAME,
+        modifiers: cloneCharacterModifiers(modifiers),
+        updatedAt: now
+      }
+    ],
+    activeModifierSetupId: modifierSetupId,
     workspaceLayout: defaultWorkspaceLayout(),
     rollHistory: [],
     presets: [
@@ -117,39 +251,63 @@ export function createDefaultData(clientId: string, now = Date.now()): AppData {
 }
 
 function normalizeLoadedData(data: AppData): AppData {
-  const rawStats = data.characterModifiers?.stats ?? ({} as Record<string, { base?: unknown; temp?: unknown }>);
-  const rawSaves = data.characterModifiers?.saves ?? ({} as Record<string, { base?: unknown; temp?: unknown }>);
+  const rawData = data as AppData & {
+    modifierSetups?: unknown;
+    activeModifierSetupId?: unknown;
+  };
+  const legacyModifiers = normalizeCharacterModifiers(data.characterModifiers);
   const rawLayout = data.workspaceLayout;
+  const normalizedModifierSetups = normalizeModifierSetups(rawData.modifierSetups, legacyModifiers, safeNumber(data.updatedAt));
+  const activeModifierSetup =
+    normalizedModifierSetups.find((setup) => setup.id === rawData.activeModifierSetupId) ?? normalizedModifierSetups[0];
 
   const normalizedLeft = Array.isArray(rawLayout?.leftOrder) ? rawLayout.leftOrder.filter((entry) => typeof entry === 'string') : [];
   const normalizedRight = Array.isArray(rawLayout?.rightOrder) ? rawLayout.rightOrder.filter((entry) => typeof entry === 'string') : [];
+  const safeLeftOrder = normalizedLeft.length > 0 ? normalizedLeft : [...DEFAULT_LAYOUT_LEFT];
+  const safeRightOrder = normalizedRight.length > 0 ? normalizedRight : [...DEFAULT_LAYOUT_RIGHT];
+  const safeColumnSplit =
+    typeof rawLayout?.columnSplit === 'number' && Number.isFinite(rawLayout.columnSplit)
+      ? Math.max(30, Math.min(70, Math.round(rawLayout.columnSplit)))
+      : 45;
+  const safeWindowWidths =
+    rawLayout?.windowWidths && typeof rawLayout.windowWidths === 'object'
+      ? Object.fromEntries(
+          Object.entries(rawLayout.windowWidths).filter(
+            ([key, value]) => typeof key === 'string' && isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value)
+          )
+        )
+      : {};
+  const safeWindowHeightsRaw =
+    rawLayout?.windowHeights && typeof rawLayout.windowHeights === 'object'
+      ? Object.fromEntries(
+          Object.entries(rawLayout.windowHeights).filter(
+            ([key, value]) => typeof key === 'string' && isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value)
+          )
+        )
+      : {};
+  const isDefaultOrder =
+    safeLeftOrder.length === DEFAULT_LAYOUT_LEFT.length &&
+    safeLeftOrder.every((entry, index) => entry === DEFAULT_LAYOUT_LEFT[index]) &&
+    safeRightOrder.length === DEFAULT_LAYOUT_RIGHT.length &&
+    safeRightOrder.every((entry, index) => entry === DEFAULT_LAYOUT_RIGHT[index]);
+  const shouldApplyDefaultHeights =
+    isDefaultOrder && safeColumnSplit === 45 && Object.keys(safeWindowWidths).length === 0 && isLegacyDefaultWindowHeights(safeWindowHeightsRaw);
 
   const safeLayout = {
     locked: rawLayout?.locked ?? true,
-    leftOrder: normalizedLeft.length > 0 ? normalizedLeft : [...DEFAULT_LAYOUT_LEFT],
-    rightOrder: normalizedRight.length > 0 ? normalizedRight : [...DEFAULT_LAYOUT_RIGHT],
+    leftOrder: safeLeftOrder,
+    rightOrder: safeRightOrder,
     windowsResizable: rawLayout?.windowsResizable ?? false,
-    columnSplit:
-      typeof rawLayout?.columnSplit === 'number' && Number.isFinite(rawLayout.columnSplit)
-        ? Math.max(30, Math.min(70, Math.round(rawLayout.columnSplit)))
-        : 45,
+    columnSplit: safeColumnSplit,
     sizesLocked: rawLayout?.sizesLocked ?? false,
-    windowWidths:
-      rawLayout?.windowWidths && typeof rawLayout.windowWidths === 'object'
-        ? Object.fromEntries(
-            Object.entries(rawLayout.windowWidths).filter(
-              ([key, value]) => typeof key === 'string' && typeof value === 'number' && Number.isFinite(value)
-            )
-          )
-        : {},
+    windowWidths: safeWindowWidths,
     windowHeights:
-      rawLayout?.windowHeights && typeof rawLayout.windowHeights === 'object'
-        ? Object.fromEntries(
-            Object.entries(rawLayout.windowHeights).filter(
-              ([key, value]) => typeof key === 'string' && typeof value === 'number' && Number.isFinite(value)
-            )
-          )
-        : {}
+      shouldApplyDefaultHeights
+        ? { ...DEFAULT_WINDOW_HEIGHTS }
+        : {
+            ...DEFAULT_WINDOW_HEIGHTS,
+            ...safeWindowHeightsRaw
+          }
   };
 
   return {
@@ -176,48 +334,9 @@ function normalizeLoadedData(data: AppData): AppData {
       resultFxHaptics: data.preferences?.resultFxHaptics ?? true,
       mobileQuickRoll: data.preferences?.mobileQuickRoll ?? true
     },
-    characterModifiers: {
-      stats: {
-        str: {
-          base: safeNumber(rawStats.str?.base),
-          temp: safeNumber(rawStats.str?.temp)
-        },
-        dex: {
-          base: safeNumber(rawStats.dex?.base),
-          temp: safeNumber(rawStats.dex?.temp)
-        },
-        con: {
-          base: safeNumber(rawStats.con?.base),
-          temp: safeNumber(rawStats.con?.temp)
-        },
-        int: {
-          base: safeNumber(rawStats.int?.base),
-          temp: safeNumber(rawStats.int?.temp)
-        },
-        wis: {
-          base: safeNumber(rawStats.wis?.base),
-          temp: safeNumber(rawStats.wis?.temp)
-        },
-        cha: {
-          base: safeNumber(rawStats.cha?.base),
-          temp: safeNumber(rawStats.cha?.temp)
-        }
-      },
-      saves: {
-        fort: {
-          base: safeNumber(rawSaves.fort?.base),
-          temp: safeNumber(rawSaves.fort?.temp)
-        },
-        reflex: {
-          base: safeNumber(rawSaves.reflex?.base),
-          temp: safeNumber(rawSaves.reflex?.temp)
-        },
-        will: {
-          base: safeNumber(rawSaves.will?.base),
-          temp: safeNumber(rawSaves.will?.temp)
-        }
-      }
-    },
+    characterModifiers: cloneCharacterModifiers(activeModifierSetup.modifiers),
+    modifierSetups: normalizedModifierSetups,
+    activeModifierSetupId: activeModifierSetup.id,
     workspaceLayout: safeLayout
   };
 }

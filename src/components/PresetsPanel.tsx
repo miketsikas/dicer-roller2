@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SavedPreset } from '../types';
+import { InfoHint } from './InfoHint';
 
 interface PresetsPanelProps {
   presets: SavedPreset[];
@@ -45,7 +46,23 @@ export function PresetsPanel({
 
   return (
     <section className={`panel presets-panel density-${density} ${className ?? ''}`.trim()}>
-      <h2>{tiny ? 'Saved Presets' : 'Saved Dice Combinations'}</h2>
+      <div className="panel-header-row">
+        <div>
+          <div className="panel-title-row">
+            <h2>{tiny ? 'Saved Presets' : 'Saved Dice Combinations'}</h2>
+            <InfoHint
+              text="Store reusable formulas or current dice mixes, then pin the ones you need in combat."
+              label="About saved presets"
+            />
+          </div>
+        </div>
+        {!tiny ? (
+          <div className="panel-header-badges">
+            <span className="badge">{presets.length} saved</span>
+            <span className="badge">{favoritePresets.length} favorites</span>
+          </div>
+        ) : null}
+      </div>
       <div className="row gap-sm presets-header-row">
         <input
           value={newName}
@@ -69,12 +86,14 @@ export function PresetsPanel({
         <button
           type="button"
           onClick={submitCreate}
+          className="primary-btn"
+          disabled={!trimmedName}
         >
           {tiny ? 'Save Preset' : 'Save Current'}
         </button>
         <button
           type="button"
-          className="preset-action-icon"
+          className="preset-action-icon presets-utility-btn"
           aria-label="Open saved preset options"
           disabled={presets.length === 0}
           onClick={() => {
@@ -89,6 +108,7 @@ export function PresetsPanel({
         </button>
       </div>
       {createError ? <p className="error-text">{createError}</p> : null}
+      {!tiny ? <p className="muted-text presets-helper-text">Saved presets keep both manual dice counts and formula text for fast reuse.</p> : null}
 
       {favoritePresets.length > 0 ? (
         <div className="preset-favorites-bar">
@@ -131,7 +151,12 @@ export function PresetsPanel({
               </button>
             </li>
           ))}
-          {presets.length === 0 ? <li className="muted-text">{tiny ? 'No presets yet.' : 'No saved presets yet.'}</li> : null}
+          {presets.length === 0 ? (
+            <li className="panel-slab presets-empty-state">
+              <h3>{tiny ? 'No Presets' : 'No saved presets yet'}</h3>
+              <p className="muted-text">{tiny ? 'Save one from your current roll setup.' : 'Name your loadout above, then save to build reusable combat shortcuts.'}</p>
+            </li>
+          ) : null}
         </ul>
       </div>
     </section>

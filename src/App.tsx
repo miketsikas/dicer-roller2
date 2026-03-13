@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { BackgroundWidget } from './components/BackgroundWidget';
 import { HistoryFeed, type HistoryFilters } from './components/HistoryFeed';
+import { InfoHint } from './components/InfoHint';
 import { Modal } from './components/Modal';
 import { ModifierToolkitPanel } from './components/ModifierToolkitPanel';
 import { PlayerRoomPanel } from './components/PlayerRoomPanel';
@@ -23,10 +24,21 @@ import { BACKGROUNDS } from './constants/backgrounds';
 import { useAppData } from './hooks/useAppData';
 import { buildCountsLabel, buildSpamKey, createEmptyCounts, groupFeedEntries, rollCounts, rollRandomBatchTemplate } from './lib/dice';
 import { evaluateFormula } from './lib/formula';
+import {
+  cloneCharacterModifiers,
+  createEmptyCharacterModifiers,
+  createModifierSetup,
+  deleteModifierSetup,
+  getModifierSetup,
+  renameModifierSetup,
+  suggestModifierSetupName,
+  updateModifierSetupModifiers
+} from './lib/modifierSetups';
 import { applyPreset, createPreset, deletePreset, renamePreset, updatePresetFromDraft } from './lib/presets';
 import { createRng } from './lib/rng';
 import { parseShareParams } from './lib/share';
 import { createId } from './lib/uuid';
+import { computeDropPlacementFromRects } from './lib/workspaceDrag';
 import { normalizeAlias, normalizeRoomCode, sanitizePositiveInt, sanitizeSignedInt, validateAlias, validateRoomCode } from './lib/validation';
 import { mergeRollEntriesNewestFirst, oldestTimestamp } from './realtime/feed';
 import {
@@ -42,11 +54,25 @@ import {
   type RoomPresenceMember
 } from './realtime/roomService';
 import { getSupabaseClient, isRealtimeConfigured } from './realtime/supabaseClient';
-import { DICE_SIDES, type CharacterModifiers, type DiceCounts, type RollEntry, type SaveKey, type StatKey, type WorkspaceLayout } from './types';
+import {
+  DICE_SIDES,
+  type AppData,
+  type CharacterModifiers,
+  type DiceCounts,
+  type ModifierSetup,
+  type RollEntry,
+  type SaveKey,
+  type StatKey,
+  type WorkspaceLayout
+} from './types';
 
 const PAGE_SIZE = 100;
 const ROOM_SYNC_INTERVAL_MS = 8_000;
 const RESULT_EMPHASIS_MS = 1_350;
+const MIN_WINDOW_WIDTH = 30;
+const MAX_WINDOW_WIDTH = 100;
+const MIN_WINDOW_HEIGHT = 180;
+const MAX_WINDOW_HEIGHT = 900;
 
 const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   searchText: '',
@@ -70,17 +96,33 @@ const MOBILE_NAV_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
   quickActions: 'Quick',
   presets: 'Preset'
 };
-const MOBILE_VIEW_LABELS: Record<(typeof WINDOW_IDS)[number], string> = {
-  history: 'Roll History',
-  rollComposer: 'Dice Roller',
-  quickActions: 'Quick Actions',
-  presets: 'Saved Presets'
-};
 
 type WorkspaceWindowId = (typeof WINDOW_IDS)[number];
 type WorkspaceColumn = 'left' | 'right';
 type WindowDensity = 'regular' | 'compact' | 'tiny';
 type RollHighlightKind = 'nat20' | 'nat1' | 'critical';
+
+const LEGACY_DEFAULT_WINDOW_HEIGHTS: ReadonlyArray<Record<WorkspaceWindowId, number>> = [
+  {
+    quickActions: 360,
+    history: 360,
+    presets: 180,
+    rollComposer: 540
+  },
+  {
+    quickActions: 450,
+    history: 450,
+    presets: 270,
+    rollComposer: 630
+  }
+];
+
+const DEFAULT_WINDOW_HEIGHTS: Record<WorkspaceWindowId, number> = {
+  quickActions: 338,
+  history: 562,
+  presets: 338,
+  rollComposer: 562
+};
 
 interface GuideStep {
   id: string;
@@ -100,6 +142,24 @@ interface RecentRollAction {
   forcedSecret: boolean;
 }
 
+interface DesktopQuickBarPosition {
+  x: number;
+  y: number;
+}
+
+interface DragTargetState {
+  column: WorkspaceColumn;
+  index: number;
+  direction: 'left' | 'right' | 'top' | 'bottom';
+  anchorId?: WorkspaceWindowId;
+  inlineTarget?: {
+    anchorId: WorkspaceWindowId;
+    side: 'left' | 'right';
+    width: number;
+    anchorWidth?: number;
+  };
+}
+
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   locked: true,
   leftOrder: ['quickActions', 'history'],
@@ -108,7 +168,7 @@ const DEFAULT_LAYOUT: WorkspaceLayout = {
   columnSplit: 45,
   sizesLocked: false,
   windowWidths: {},
-  windowHeights: {}
+  windowHeights: { ...DEFAULT_WINDOW_HEIGHTS }
 };
 
 type ModifierRefKey = StatKey | SaveKey;
@@ -153,6 +213,20 @@ function isWorkspaceWindowId(value: string): value is WorkspaceWindowId {
   return (WINDOW_IDS as readonly string[]).includes(value);
 }
 
+function isLegacyDefaultWindowHeights(heights: Record<string, number>): boolean {
+  const entries = Object.entries(heights).filter(([key]) => isWorkspaceWindowId(key));
+  if (entries.length === 0) {
+    return true;
+  }
+  const allClassic = entries.every(([, value]) => Math.round(value) === 360);
+  if (allClassic) {
+    return true;
+  }
+  return LEGACY_DEFAULT_WINDOW_HEIGHTS.some((profile) =>
+    entries.every(([key, value]) => Math.round(value) === profile[key as WorkspaceWindowId])
+  );
+}
+
 function normalizeWorkspaceLayout(layout: WorkspaceLayout | undefined): WorkspaceLayout {
   if (!layout) {
     return {
@@ -186,6 +260,7 @@ function normalizeWorkspaceLayout(layout: WorkspaceLayout | undefined): Workspac
   const resolvedLeft: WorkspaceWindowId[] = left.length > 0 ? left : fallbackLeft;
   const merged = new Set<WorkspaceWindowId>([...resolvedLeft, ...right]);
   const missing = WINDOW_IDS.filter((id) => !merged.has(id));
+  const resolvedRight: WorkspaceWindowId[] = [...right, ...missing];
   const rawSplit = typeof layout.columnSplit === 'number' && Number.isFinite(layout.columnSplit) ? layout.columnSplit : DEFAULT_LAYOUT.columnSplit ?? 45;
   const safeSplit = Math.max(30, Math.min(70, Math.round(rawSplit)));
   const rawWidths = layout.windowWidths && typeof layout.windowWidths === 'object' ? layout.windowWidths : {};
@@ -193,25 +268,42 @@ function normalizeWorkspaceLayout(layout: WorkspaceLayout | undefined): Workspac
   const safeWidths = Object.fromEntries(
     Object.entries(rawWidths).filter(
       ([key, value]) =>
-        isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value) && value >= 35 && value <= 100
+        isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value) && value >= MIN_WINDOW_WIDTH && value <= MAX_WINDOW_WIDTH
     )
   );
   const safeHeights = Object.fromEntries(
     Object.entries(rawHeights).filter(
       ([key, value]) =>
-        isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value) && value >= 180 && value <= 900
+        isWorkspaceWindowId(key) && typeof value === 'number' && Number.isFinite(value) && value >= MIN_WINDOW_HEIGHT && value <= MAX_WINDOW_HEIGHT
     )
   );
+  const hasCustomWidths = Object.keys(safeWidths).length > 0;
+  const isDefaultOrder =
+    resolvedLeft.length === DEFAULT_LAYOUT.leftOrder.length &&
+    resolvedLeft.every((id, index) => id === DEFAULT_LAYOUT.leftOrder[index]) &&
+    resolvedRight.length === DEFAULT_LAYOUT.rightOrder.length &&
+    resolvedRight.every((id, index) => id === DEFAULT_LAYOUT.rightOrder[index]);
+  const shouldApplyDefaultHeights =
+    isDefaultOrder &&
+    !hasCustomWidths &&
+    safeSplit === (DEFAULT_LAYOUT.columnSplit ?? 45) &&
+    isLegacyDefaultWindowHeights(safeHeights);
+  const mergedHeights = shouldApplyDefaultHeights
+    ? { ...(DEFAULT_LAYOUT.windowHeights ?? {}) }
+    : {
+        ...(DEFAULT_LAYOUT.windowHeights ?? {}),
+        ...safeHeights
+      };
 
   return {
     locked: layout.locked ?? true,
     leftOrder: resolvedLeft,
-    rightOrder: [...right, ...missing],
+    rightOrder: resolvedRight,
     windowsResizable: layout.windowsResizable ?? DEFAULT_LAYOUT.windowsResizable ?? false,
     columnSplit: safeSplit,
     sizesLocked: layout.sizesLocked ?? DEFAULT_LAYOUT.sizesLocked ?? false,
     windowWidths: safeWidths,
-    windowHeights: safeHeights
+    windowHeights: mergedHeights
   };
 }
 
@@ -248,11 +340,34 @@ function formatSigned(value: number): string {
 }
 
 function clampWindowWidth(value: number): number {
-  return Math.max(35, Math.min(100, Math.round(value)));
+  return Math.max(MIN_WINDOW_WIDTH, Math.min(MAX_WINDOW_WIDTH, Math.round(value)));
 }
 
 function clampWindowHeight(value: number): number {
-  return Math.max(180, Math.min(900, Math.round(value)));
+  return Math.max(MIN_WINDOW_HEIGHT, Math.min(MAX_WINDOW_HEIGHT, Math.round(value)));
+}
+
+function applyBalancedColumnWidths(order: WorkspaceWindowId[], existingWidths: Record<string, number> | undefined): Record<string, number> {
+  const next = { ...(existingWidths ?? {}) };
+
+  for (let index = 0; index < order.length; index += 2) {
+    const first = order[index];
+    const second = order[index + 1];
+
+    if (!first) {
+      continue;
+    }
+
+    if (!second) {
+      next[first] = 100;
+      continue;
+    }
+
+    next[first] = 50;
+    next[second] = 50;
+  }
+
+  return next;
 }
 
 function resolveDensity(width: number): WindowDensity {
@@ -265,29 +380,48 @@ function resolveDensity(width: number): WindowDensity {
   return 'regular';
 }
 
-function computeDropIndexFromPointer(columnEl: HTMLDivElement, clientX: number, clientY: number): number {
-  const cells = Array.from(columnEl.querySelectorAll<HTMLElement>(':scope > .workspace-cell'));
-  if (cells.length === 0) {
-    return 0;
-  }
-
-  for (let index = 0; index < cells.length; index += 1) {
-    const rect = cells[index].getBoundingClientRect();
-    if (clientY < rect.top) {
-      return index;
+function computeDropPlacementFromPointer(
+  columnEl: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+  windowWidths: Record<string, number> | undefined,
+  draggingWindowId: WorkspaceWindowId | null
+): DragTargetState {
+  const cells = Array.from(columnEl.querySelectorAll<HTMLElement>(':scope > .workspace-cell')).flatMap((cell, index) => {
+    const windowId = cell.dataset.windowId;
+    if (!windowId || !isWorkspaceWindowId(windowId)) {
+      return [];
     }
 
-    if (clientY <= rect.bottom) {
-      if (clientX < rect.left + rect.width / 2) {
-        return index;
+    const rect = cell.getBoundingClientRect();
+    return [
+      {
+        id: windowId,
+        index,
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+        width: clampWindowWidth(windowWidths?.[windowId] ?? 100)
       }
-      if (clientX <= rect.right) {
-        return index + 1;
-      }
-    }
-  }
+    ];
+  });
 
-  return cells.length;
+  const placement = computeDropPlacementFromRects(cells, clientX, clientY, draggingWindowId ?? undefined);
+  return {
+    column: columnEl.dataset.column === 'right' ? 'right' : 'left',
+    index: placement.index,
+    direction: placement.direction,
+    anchorId: placement.anchorId && isWorkspaceWindowId(placement.anchorId) ? placement.anchorId : undefined,
+    inlineTarget: placement.inlineTarget && isWorkspaceWindowId(placement.inlineTarget.anchorId)
+      ? {
+          anchorId: placement.inlineTarget.anchorId,
+          side: placement.inlineTarget.side,
+          width: placement.inlineTarget.width,
+          anchorWidth: placement.inlineTarget.anchorWidth
+        }
+      : undefined
+  };
 }
 
 function getModifierTotal(modifiers: CharacterModifiers, key: ModifierRefKey): number {
@@ -335,6 +469,28 @@ function appendModifierToken(formula: string, key: ModifierRefKey, modifiers: Ch
   }
 
   return `${trimmed}+${token}`;
+}
+
+function findActiveModifierSetup(data: Pick<AppData, 'modifierSetups' | 'activeModifierSetupId'>): ModifierSetup | null {
+  return data.modifierSetups.find((setup) => setup.id === data.activeModifierSetupId) ?? data.modifierSetups[0] ?? null;
+}
+
+function withSelectedModifierSetup(data: AppData, setupId: string): AppData {
+  const activeSetup = getModifierSetup(data.modifierSetups, setupId);
+  return {
+    ...data,
+    activeModifierSetupId: activeSetup.id,
+    characterModifiers: cloneCharacterModifiers(activeSetup.modifiers)
+  };
+}
+
+function withUpdatedActiveModifierSetup(data: AppData, updater: (modifiers: CharacterModifiers) => CharacterModifiers): AppData {
+  const nextModifiers = updater(cloneCharacterModifiers(data.characterModifiers));
+  return {
+    ...data,
+    characterModifiers: nextModifiers,
+    modifierSetups: updateModifierSetupModifiers(data.modifierSetups, data.activeModifierSetupId, nextModifiers)
+  };
 }
 
 function isKnownDieSides(value: number): value is (typeof DICE_SIDES)[number] {
@@ -483,9 +639,12 @@ export default function App(): JSX.Element {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [mobileActiveWindow, setMobileActiveWindow] = useState<WorkspaceWindowId>('history');
   const [mobilePanelHeight, setMobilePanelHeight] = useState<number | null>(null);
+  const [desktopQuickBarPinned, setDesktopQuickBarPinned] = useState(false);
+  const [desktopQuickBarPosition, setDesktopQuickBarPosition] = useState<DesktopQuickBarPosition | null>(null);
+  const [desktopQuickBarDragging, setDesktopQuickBarDragging] = useState(false);
 
   const [draggingWindowId, setDraggingWindowId] = useState<WorkspaceWindowId | null>(null);
-  const [dragTarget, setDragTarget] = useState<{ column: WorkspaceColumn; index: number } | null>(null);
+  const [dragTarget, setDragTarget] = useState<DragTargetState | null>(null);
   const [selectedWindowId, setSelectedWindowId] = useState<WorkspaceWindowId | null>(null);
   const [resizingWindowId, setResizingWindowId] = useState<WorkspaceWindowId | null>(null);
   const [windowDensities, setWindowDensities] = useState<Record<WorkspaceWindowId, WindowDensity>>({
@@ -519,6 +678,14 @@ export default function App(): JSX.Element {
   });
   const workspaceGridRef = useRef<HTMLDivElement | null>(null);
   const mobileBottomStackRef = useRef<HTMLDivElement | null>(null);
+  const desktopQuickBarRef = useRef<HTMLDivElement | null>(null);
+  const desktopQuickBarDragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const heroMenuRef = useRef<HTMLDivElement | null>(null);
   const roomButtonRef = useRef<HTMLButtonElement | null>(null);
   const mobileNavButtonRefs = useRef<Record<WorkspaceWindowId, HTMLButtonElement | null>>({
@@ -819,6 +986,66 @@ export default function App(): JSX.Element {
   }, [error, isMobileViewport, localError, showLayoutModal, statusMessage]);
 
   useEffect(() => {
+    if (!desktopQuickBarPinned || selectedWindowId !== 'quickActions') {
+      return;
+    }
+    setSelectedWindowId(null);
+  }, [desktopQuickBarPinned, selectedWindowId]);
+
+  useEffect(() => {
+    if (!desktopQuickBarPinned) {
+      desktopQuickBarDragRef.current = null;
+      setDesktopQuickBarDragging(false);
+      return;
+    }
+    setDesktopQuickBarPosition(null);
+  }, [desktopQuickBarPinned]);
+
+  const clampDesktopQuickBarPosition = useCallback((x: number, y: number, width: number, height: number): DesktopQuickBarPosition => {
+    const horizontalPadding = 12;
+    const verticalPadding = 12;
+    const maxX = Math.max(horizontalPadding, window.innerWidth - width - horizontalPadding);
+    const maxY = Math.max(verticalPadding, window.innerHeight - height - verticalPadding);
+
+    return {
+      x: Math.round(Math.min(maxX, Math.max(horizontalPadding, x))),
+      y: Math.round(Math.min(maxY, Math.max(verticalPadding, y)))
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!desktopQuickBarPinned || !desktopQuickBarPosition) {
+      return;
+    }
+
+    const clampPosition = (): void => {
+      const barRect = desktopQuickBarRef.current?.getBoundingClientRect();
+      if (!barRect) {
+        return;
+      }
+
+      setDesktopQuickBarPosition((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const next = clampDesktopQuickBarPosition(previous.x, previous.y, barRect.width, barRect.height);
+        if (next.x === previous.x && next.y === previous.y) {
+          return previous;
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('resize', clampPosition);
+    window.visualViewport?.addEventListener('resize', clampPosition);
+
+    return () => {
+      window.removeEventListener('resize', clampPosition);
+      window.visualViewport?.removeEventListener('resize', clampPosition);
+    };
+  }, [clampDesktopQuickBarPosition, desktopQuickBarPinned, desktopQuickBarPosition]);
+
+  useEffect(() => {
     if (!isMobileViewport || !showLayoutModal) {
       return;
     }
@@ -1021,6 +1248,7 @@ export default function App(): JSX.Element {
     }
     return BACKGROUNDS.find((background) => background.id === 'citadel') ?? BACKGROUNDS[0];
   }, [data?.preferences.backgroundId]);
+  const activeModifierSetup = useMemo(() => (data ? findActiveModifierSetup(data) : null), [data]);
 
   const visibleEntries = useMemo(() => (connectedRoomCode ? roomEntries : data?.rollHistory ?? []), [connectedRoomCode, data?.rollHistory, roomEntries]);
   const currentAliasKey = useMemo(() => normalizeAlias(data?.preferences.playerAlias ?? '').toLowerCase(), [data?.preferences.playerAlias]);
@@ -1070,10 +1298,20 @@ export default function App(): JSX.Element {
   }, [data]);
   const recentRollActions = useMemo(() => deriveRecentRollActions(data?.rollHistory ?? []), [data?.rollHistory]);
   const recentActionMap = useMemo(() => new Map(recentRollActions.map((action) => [action.id, action])), [recentRollActions]);
+  const sceneTheme = currentBackground.id === 'forge' ? 'obsidian' : 'azure';
   const reduceMotionEnabled = useMemo(
     () => Boolean(data?.preferences.reduceMotion) || prefersReducedMotion,
     [data?.preferences.reduceMotion, prefersReducedMotion]
   );
+
+  useEffect(() => {
+    const themeClass = `ui-theme-${sceneTheme}`;
+    document.body.classList.remove('ui-theme-azure', 'ui-theme-obsidian');
+    document.body.classList.add(themeClass);
+    return () => {
+      document.body.classList.remove(themeClass);
+    };
+  }, [sceneTheme]);
 
   useEffect(() => {
     document.body.classList.toggle('reduce-motion', reduceMotionEnabled);
@@ -1220,12 +1458,21 @@ export default function App(): JSX.Element {
     };
 
     const element = activeGuideStep.target();
-    if (element) {
-      element.scrollIntoView({
-        behavior: reduceMotionEnabled ? 'auto' : 'smooth',
-        block: 'center',
-        inline: 'nearest'
-      });
+    if (element && typeof element.scrollIntoView === 'function') {
+      try {
+        element.scrollIntoView({
+          behavior: reduceMotionEnabled ? 'auto' : 'smooth',
+          block: 'center',
+          inline: 'nearest'
+        });
+      } catch {
+        try {
+          // Fallback for engines that only support legacy scrollIntoView signatures.
+          element.scrollIntoView();
+        } catch {
+          // Ignore engines with no usable scrollIntoView implementation.
+        }
+      }
     }
     updateRect();
 
@@ -1651,9 +1898,9 @@ export default function App(): JSX.Element {
       const refreshed = refreshModifierTokens(previous, data.characterModifiers);
       return appendModifierToken(refreshed, key, data.characterModifiers);
     });
-    setStatusMessage(`${label} ${formatSigned(total)} inserted into formula.`);
+    setStatusMessage(`${label} ${formatSigned(total)} inserted from ${activeModifierSetup?.name ?? 'active setup'}.`);
     setLocalError(null);
-  }, [data]);
+  }, [activeModifierSetup?.name, data]);
 
   const setLayoutLocked = useCallback(
     (locked: boolean): void => {
@@ -1670,11 +1917,45 @@ export default function App(): JSX.Element {
 
   const setWindowsResizable = useCallback(
     (enabled: boolean): void => {
+      const measuredHeights: Partial<Record<WorkspaceWindowId, number>> = {};
+      if (enabled) {
+        for (const windowId of WINDOW_IDS) {
+          const element = windowCellRefs.current[windowId];
+          if (!element) {
+            continue;
+          }
+          measuredHeights[windowId] = clampWindowHeight(element.getBoundingClientRect().height);
+        }
+      }
+
       commit((previous) => ({
         ...previous,
         workspaceLayout: {
           ...normalizeWorkspaceLayout(previous.workspaceLayout),
-          windowsResizable: enabled
+          windowsResizable: enabled,
+          windowHeights: (() => {
+            const normalized = normalizeWorkspaceLayout(previous.workspaceLayout);
+            if (!enabled || normalized.windowsResizable) {
+              return normalized.windowHeights;
+            }
+
+            const hasSavedHeights = Object.keys(normalized.windowHeights ?? {}).length > 0;
+            const nextHeights = hasSavedHeights
+              ? { ...(normalized.windowHeights ?? {}) }
+              : { ...(DEFAULT_LAYOUT.windowHeights ?? {}) };
+
+            for (const windowId of WINDOW_IDS) {
+              const measured = measuredHeights[windowId];
+              if (typeof nextHeights[windowId] === 'number') {
+                continue;
+              }
+              if (typeof measured === 'number' && Number.isFinite(measured)) {
+                nextHeights[windowId] = measured;
+              }
+            }
+
+            return nextHeights;
+          })()
         }
       }));
     },
@@ -1735,29 +2016,9 @@ export default function App(): JSX.Element {
   const autoBalanceBlocks = useCallback((): void => {
     commit((previous) => {
       const normalized = normalizeWorkspaceLayout(previous.workspaceLayout);
-      const widths = { ...(normalized.windowWidths ?? {}) };
-
-      const assignForColumn = (ids: WorkspaceWindowId[]): void => {
-        if (ids.length === 0) {
-          return;
-        }
-        if (ids.length === 1) {
-          widths[ids[0]] = 100;
-          return;
-        }
-        if (ids.length === 2) {
-          widths[ids[0]] = 50;
-          widths[ids[1]] = 50;
-          return;
-        }
-
-        ids.forEach((id, index) => {
-          widths[id] = index % 3 === 2 ? 100 : 50;
-        });
-      };
-
-      assignForColumn(normalized.leftOrder.filter(isWorkspaceWindowId));
-      assignForColumn(normalized.rightOrder.filter(isWorkspaceWindowId));
+      let widths = { ...(normalized.windowWidths ?? {}) };
+      widths = applyBalancedColumnWidths(normalized.leftOrder.filter(isWorkspaceWindowId), widths);
+      widths = applyBalancedColumnWidths(normalized.rightOrder.filter(isWorkspaceWindowId), widths);
 
       return {
         ...previous,
@@ -1772,17 +2033,28 @@ export default function App(): JSX.Element {
   }, [commit]);
 
   const moveWindowInLayout = useCallback(
-    (windowId: WorkspaceWindowId, targetColumn: WorkspaceColumn, targetIndex: number): void => {
+    (windowId: WorkspaceWindowId, targetColumn: WorkspaceColumn, targetIndex: number, inlineTarget?: DragTargetState['inlineTarget']): void => {
       commit((previous) => {
         const normalized = normalizeWorkspaceLayout(previous.workspaceLayout);
-        const moved = moveWindow(normalized, windowId, targetColumn, targetIndex);
-        const widths = { ...(normalized.windowWidths ?? {}) };
-        const targetOrder = targetColumn === 'left' ? moved.leftOrder : moved.rightOrder;
-        const siblingCount = targetOrder.length;
-        const currentWidth = typeof widths[windowId] === 'number' ? widths[windowId] : 100;
+        const targetOrder = (targetColumn === 'left' ? normalized.leftOrder : normalized.rightOrder).filter((id) => id !== windowId);
+        let resolvedIndex = targetIndex;
 
-        // If users place multiple windows in the same column flow, shrink the moved one to fit side-by-side.
-        widths[windowId] = siblingCount >= 2 ? clampWindowWidth(Math.min(currentWidth, 48)) : 100;
+        if (inlineTarget) {
+          const anchorIndex = targetOrder.indexOf(inlineTarget.anchorId);
+          if (anchorIndex >= 0) {
+            resolvedIndex = inlineTarget.side === 'left' ? anchorIndex : anchorIndex + 1;
+          }
+        }
+
+        const moved = moveWindow(normalized, windowId, targetColumn, resolvedIndex);
+        const widths = { ...(normalized.windowWidths ?? {}) };
+
+        if (inlineTarget) {
+          widths[windowId] = clampWindowWidth(inlineTarget.width);
+          if (typeof inlineTarget.anchorWidth === 'number') {
+            widths[inlineTarget.anchorId] = clampWindowWidth(inlineTarget.anchorWidth);
+          }
+        }
 
         return {
           ...previous,
@@ -1843,9 +2115,9 @@ export default function App(): JSX.Element {
               };
 
               if (peerCount > 0) {
-                const maxTarget = 100 - peerCount * 35;
-                if (maxTarget >= 35) {
-                  const targetWidth = Math.max(35, Math.min(maxTarget, clampWindowWidth(width)));
+                const maxTarget = 100 - peerCount * MIN_WINDOW_WIDTH;
+                if (maxTarget >= MIN_WINDOW_WIDTH) {
+                  const targetWidth = Math.max(MIN_WINDOW_WIDTH, Math.min(maxTarget, clampWindowWidth(width)));
                   widths[windowId] = targetWidth;
 
                   if (peerCount === 1) {
@@ -1858,11 +2130,11 @@ export default function App(): JSX.Element {
 
                     activePeers.forEach((peerId, index) => {
                       if (index === activePeers.length - 1) {
-                        widths[peerId] = Math.max(35, remaining - distributed);
+                        widths[peerId] = Math.max(MIN_WINDOW_WIDTH, remaining - distributed);
                         return;
                       }
                       const rawShare = Math.round((ratioSource[index] / ratioSum) * remaining);
-                      const nextShare = Math.max(35, rawShare);
+                      const nextShare = Math.max(MIN_WINDOW_WIDTH, rawShare);
                       widths[peerId] = nextShare;
                       distributed += nextShare;
                     });
@@ -1999,6 +2271,7 @@ export default function App(): JSX.Element {
       setSelectedWindowId(windowId);
       setDraggingWindowId(windowId);
       setDragTarget(null);
+      document.body.classList.add('layout-pointer-dragging');
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/plain', windowId);
     };
@@ -2006,6 +2279,7 @@ export default function App(): JSX.Element {
   const onWindowDragEnd = (): void => {
     setDraggingWindowId(null);
     setDragTarget(null);
+    document.body.classList.remove('layout-pointer-dragging');
   };
 
   useEffect(() => {
@@ -2129,15 +2403,28 @@ export default function App(): JSX.Element {
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
 
-      const dropIndex = computeDropIndexFromPointer(event.currentTarget, event.clientX, event.clientY);
+      const placement = computeDropPlacementFromPointer(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+        workspaceLayout.windowWidths,
+        draggingWindowId
+      );
       setDragTarget((previous) => {
-        if (previous && previous.column === column && previous.index === dropIndex) {
+        if (
+          previous &&
+          previous.column === column &&
+          previous.index === placement.index &&
+          previous.direction === placement.direction &&
+          previous.anchorId === placement.anchorId &&
+          previous.inlineTarget?.anchorId === placement.inlineTarget?.anchorId &&
+          previous.inlineTarget?.side === placement.inlineTarget?.side &&
+          previous.inlineTarget?.width === placement.inlineTarget?.width &&
+          previous.inlineTarget?.anchorWidth === placement.inlineTarget?.anchorWidth
+        ) {
           return previous;
         }
-        return {
-          column,
-          index: dropIndex
-        };
+        return placement;
       });
     };
 
@@ -2156,14 +2443,21 @@ export default function App(): JSX.Element {
         return;
       }
 
-      const fallbackIndex = computeDropIndexFromPointer(event.currentTarget, event.clientX, event.clientY);
-      const resolvedIndex =
+      const fallbackPlacement = computeDropPlacementFromPointer(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+        workspaceLayout.windowWidths,
+        dragged
+      );
+      const resolvedPlacement =
         dragTarget && dragTarget.column === column
-          ? dragTarget.index
-          : fallbackIndex;
-      moveWindowInLayout(dragged, column, resolvedIndex);
+          ? dragTarget
+          : fallbackPlacement;
+      moveWindowInLayout(dragged, column, resolvedPlacement.index, resolvedPlacement.inlineTarget);
       setDraggingWindowId(null);
       setDragTarget(null);
+      document.body.classList.remove('layout-pointer-dragging');
     };
 
   const onColumnDragLeave =
@@ -2175,6 +2469,8 @@ export default function App(): JSX.Element {
       }
       setDragTarget((previous) => (previous && previous.column === column ? null : previous));
     };
+
+  useEffect(() => () => document.body.classList.remove('layout-pointer-dragging'), []);
 
   useEffect(() => {
     if (workspaceLayout.locked || !selectedWindowId) {
@@ -2290,7 +2586,7 @@ export default function App(): JSX.Element {
   }, [data, formula, loading, runRoll]);
 
   if (loading || !data) {
-    return <main className="app-shell">Loading workspace...</main>;
+    return <main className={`app-shell ui-theme-${sceneTheme}`}>Loading workspace...</main>;
   }
 
   const canPaginateRoomHistory = !!connectedRoomCode;
@@ -2351,73 +2647,194 @@ export default function App(): JSX.Element {
     />
   );
 
+  const selectModifierSetup = (setupId: string): void => {
+    if (setupId === data.activeModifierSetupId) {
+      return;
+    }
+
+    clearMessages();
+    try {
+      const selected = getModifierSetup(data.modifierSetups, setupId);
+      commit((previous) => withSelectedModifierSetup(previous, setupId));
+      setStatusMessage(`Formula modifiers now use "${selected.name}".`);
+    } catch (setupError) {
+      setLocalError((setupError as Error).message);
+    }
+  };
+
+  const createBlankModifierSetup = (): void => {
+    clearMessages();
+    try {
+      const nextName = suggestModifierSetupName(data.modifierSetups, 'Setup');
+      commit((previous) => {
+        const nextSetups = createModifierSetup(previous.modifierSetups, {
+          name: nextName,
+          modifiers: createEmptyCharacterModifiers()
+        });
+        return withSelectedModifierSetup(
+          {
+            ...previous,
+            modifierSetups: nextSetups
+          },
+          nextSetups[0].id
+        );
+      });
+      setStatusMessage(`Setup "${nextName}" created.`);
+    } catch (setupError) {
+      setLocalError((setupError as Error).message);
+    }
+  };
+
+  const duplicateActiveModifierSetup = (): void => {
+    if (!activeModifierSetup) {
+      return;
+    }
+
+    clearMessages();
+    try {
+      const nextName = suggestModifierSetupName(data.modifierSetups, `${activeModifierSetup.name} Copy`);
+      commit((previous) => {
+        const source = findActiveModifierSetup(previous);
+        const nextSetups = createModifierSetup(previous.modifierSetups, {
+          name: nextName,
+          modifiers: source?.modifiers ?? previous.characterModifiers
+        });
+        return withSelectedModifierSetup(
+          {
+            ...previous,
+            modifierSetups: nextSetups
+          },
+          nextSetups[0].id
+        );
+      });
+      setStatusMessage(`Setup "${nextName}" duplicated.`);
+    } catch (setupError) {
+      setLocalError((setupError as Error).message);
+    }
+  };
+
+  const renameActiveModifierSetup = (nextName: string): void => {
+    if (!activeModifierSetup) {
+      return;
+    }
+
+    clearMessages();
+    try {
+      const trimmed = nextName.trim();
+      commit((previous) => ({
+        ...previous,
+        modifierSetups: renameModifierSetup(previous.modifierSetups, previous.activeModifierSetupId, trimmed)
+      }));
+      setStatusMessage(`Setup renamed to "${trimmed}".`);
+    } catch (setupError) {
+      setLocalError((setupError as Error).message);
+    }
+  };
+
+  const deleteActiveModifierSetup = (): void => {
+    if (!activeModifierSetup) {
+      return;
+    }
+    if (data.modifierSetups.length <= 1) {
+      setLocalError('Create another setup before deleting this one.');
+      setStatusMessage(null);
+      return;
+    }
+
+    clearMessages();
+    try {
+      const remaining = deleteModifierSetup(data.modifierSetups, activeModifierSetup.id);
+      const nextActive = remaining[0];
+      if (!nextActive) {
+        throw new Error('Setup not found.');
+      }
+
+      commit((previous) => {
+        const nextSetups = deleteModifierSetup(previous.modifierSetups, previous.activeModifierSetupId);
+        return withSelectedModifierSetup(
+          {
+            ...previous,
+            modifierSetups: nextSetups
+          },
+          nextActive.id
+        );
+      });
+      setStatusMessage(`Setup "${activeModifierSetup.name}" deleted.`);
+    } catch (setupError) {
+      setLocalError((setupError as Error).message);
+    }
+  };
+
   const updateStatBase = (key: StatKey, value: number): void => {
-    commit((previous) => ({
-      ...previous,
-      characterModifiers: {
-        ...previous.characterModifiers,
+    commit((previous) =>
+      withUpdatedActiveModifierSetup(previous, (modifiers) => ({
+        ...modifiers,
         stats: {
-          ...previous.characterModifiers.stats,
+          ...modifiers.stats,
           [key]: {
-            ...previous.characterModifiers.stats[key],
+            ...modifiers.stats[key],
             base: sanitizeSignedInt(value, -9999, 9999)
           }
         }
-      }
-    }));
+      }))
+    );
   };
 
   const updateStatTemp = (key: StatKey, value: number): void => {
-    commit((previous) => ({
-      ...previous,
-      characterModifiers: {
-        ...previous.characterModifiers,
+    commit((previous) =>
+      withUpdatedActiveModifierSetup(previous, (modifiers) => ({
+        ...modifiers,
         stats: {
-          ...previous.characterModifiers.stats,
+          ...modifiers.stats,
           [key]: {
-            ...previous.characterModifiers.stats[key],
+            ...modifiers.stats[key],
             temp: sanitizeSignedInt(value, -9999, 9999)
           }
         }
-      }
-    }));
+      }))
+    );
   };
 
   const updateSaveBase = (key: SaveKey, value: number): void => {
-    commit((previous) => ({
-      ...previous,
-      characterModifiers: {
-        ...previous.characterModifiers,
+    commit((previous) =>
+      withUpdatedActiveModifierSetup(previous, (modifiers) => ({
+        ...modifiers,
         saves: {
-          ...previous.characterModifiers.saves,
+          ...modifiers.saves,
           [key]: {
-            ...previous.characterModifiers.saves[key],
+            ...modifiers.saves[key],
             base: sanitizeSignedInt(value, -9999, 9999)
           }
         }
-      }
-    }));
+      }))
+    );
   };
 
   const updateSaveTemp = (key: SaveKey, value: number): void => {
-    commit((previous) => ({
-      ...previous,
-      characterModifiers: {
-        ...previous.characterModifiers,
+    commit((previous) =>
+      withUpdatedActiveModifierSetup(previous, (modifiers) => ({
+        ...modifiers,
         saves: {
-          ...previous.characterModifiers.saves,
+          ...modifiers.saves,
           [key]: {
-            ...previous.characterModifiers.saves[key],
+            ...modifiers.saves[key],
             temp: sanitizeSignedInt(value, -9999, 9999)
           }
         }
-      }
-    }));
+      }))
+    );
   };
 
   const modifiersPanel = (
     <ModifierToolkitPanel
+      modifierSetups={data.modifierSetups}
+      activeSetupId={data.activeModifierSetupId}
       modifiers={data.characterModifiers}
+      onSelectSetup={selectModifierSetup}
+      onCreateSetup={createBlankModifierSetup}
+      onDuplicateSetup={duplicateActiveModifierSetup}
+      onRenameSetup={renameActiveModifierSetup}
+      onDeleteSetup={deleteActiveModifierSetup}
       onStatBaseChange={updateStatBase}
       onStatTempChange={updateStatTemp}
       onSaveBaseChange={updateSaveBase}
@@ -2488,6 +2905,10 @@ export default function App(): JSX.Element {
   );
 
   const favoritePresetButtons = favoritePresets.map((preset) => ({ id: preset.id, name: preset.name }));
+  const stickyFavoritePresets = favoritePresetButtons.slice(0, 4);
+  const stickyRecentActions = recentRollActions.slice(0, 4);
+  const stickyFavoriteOverflow = Math.max(0, favoritePresetButtons.length - stickyFavoritePresets.length);
+  const stickyRecentOverflow = Math.max(0, recentRollActions.length - stickyRecentActions.length);
   const runQuickPublicD20 = (): void => {
     runRoll({ source: 'quick', useFormula: true, forcedFormula: '1d20', forcedSecret: false, note: 'Quick 1d20' });
   };
@@ -2503,9 +2924,81 @@ export default function App(): JSX.Element {
     setShowGuide(true);
   };
 
+  const onDesktopQuickBarDragStart = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (!event.isPrimary || !desktopQuickBarPinned || isMobileViewport) {
+      return;
+    }
+
+    const barRect = desktopQuickBarRef.current?.getBoundingClientRect();
+    if (!barRect) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore browsers with partial pointer-capture support.
+      }
+    }
+
+    const clampedOrigin = clampDesktopQuickBarPosition(barRect.left, barRect.top, barRect.width, barRect.height);
+    setDesktopQuickBarPosition((previous) => previous ?? clampedOrigin);
+    desktopQuickBarDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - clampedOrigin.x,
+      offsetY: event.clientY - clampedOrigin.y,
+      width: barRect.width,
+      height: barRect.height
+    };
+    setDesktopQuickBarDragging(true);
+  };
+
+  const onDesktopQuickBarDragMove = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const session = desktopQuickBarDragRef.current;
+    if (!session || session.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextLeft = event.clientX - session.offsetX;
+    const nextTop = event.clientY - session.offsetY;
+    setDesktopQuickBarPosition(clampDesktopQuickBarPosition(nextLeft, nextTop, session.width, session.height));
+  };
+
+  const endDesktopQuickBarDrag = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const session = desktopQuickBarDragRef.current;
+    if (!session || session.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const target = event.currentTarget;
+    if (
+      typeof target.hasPointerCapture === 'function' &&
+      typeof target.releasePointerCapture === 'function' &&
+      target.hasPointerCapture(event.pointerId)
+    ) {
+      target.releasePointerCapture(event.pointerId);
+    }
+    desktopQuickBarDragRef.current = null;
+    setDesktopQuickBarDragging(false);
+  };
+
+  const desktopQuickBarStyle: CSSProperties | undefined = desktopQuickBarPosition
+    ? {
+        left: `${desktopQuickBarPosition.x}px`,
+        top: `${desktopQuickBarPosition.y}px`,
+        bottom: 'auto',
+        transform: 'none'
+      }
+    : undefined;
+
   const windowContent: Record<WorkspaceWindowId, JSX.Element> = {
     presets: (
       <div
+        className="window-panel-wrap"
         ref={(element) => {
           panelGuideRefs.current.presets = element;
         }}
@@ -2515,6 +3008,7 @@ export default function App(): JSX.Element {
     ),
     quickActions: (
       <div
+        className="window-panel-wrap"
         ref={(element) => {
           panelGuideRefs.current.quickActions = element;
         }}
@@ -2524,6 +3018,8 @@ export default function App(): JSX.Element {
           onRollPublicD20={runQuickPublicD20}
           onRollSecretD20={runQuickSecretD20}
           onRollRandomBatch={runQuickRandomBatch}
+          stickyBarEnabled={desktopQuickBarPinned}
+          onToggleStickyBar={() => setDesktopQuickBarPinned((previous) => !previous)}
           favoritePresets={favoritePresetButtons}
           recentRollActions={recentRollActions.map((action) => ({ id: action.id, label: action.label, detail: action.detail }))}
           onRunFavoritePreset={(presetId) => {
@@ -2535,6 +3031,7 @@ export default function App(): JSX.Element {
     ),
     rollComposer: (
       <div
+        className="window-panel-wrap"
         ref={(element) => {
           panelGuideRefs.current.rollComposer = element;
         }}
@@ -2544,6 +3041,8 @@ export default function App(): JSX.Element {
           counts={counts}
           formula={formula}
           modifiers={data.characterModifiers}
+          modifierSetups={data.modifierSetups}
+          activeModifierSetupId={data.activeModifierSetupId}
           secretRoll={secretRoll}
           onCountChange={(sides, value) => {
             setCounts((previous) => ({
@@ -2554,6 +3053,7 @@ export default function App(): JSX.Element {
           onFormulaChange={(value) => {
             setFormula(value);
           }}
+          onModifierSetupChange={selectModifierSetup}
           onInsertModifier={insertFormulaModifier}
           onSecretRollChange={(value) => setSecretRoll(value)}
           onRoll={() => runRoll({ source: 'manual', useFormula: false })}
@@ -2570,6 +3070,7 @@ export default function App(): JSX.Element {
     ),
     history: (
       <div
+        className="window-panel-wrap"
         ref={(element) => {
           panelGuideRefs.current.history = element;
         }}
@@ -2594,7 +3095,9 @@ export default function App(): JSX.Element {
   };
 
   const renderColumn = (column: WorkspaceColumn): JSX.Element | null => {
-    const orderedIds = (column === 'left' ? workspaceLayout.leftOrder : workspaceLayout.rightOrder).filter(isWorkspaceWindowId);
+    const orderedIdsBase = (column === 'left' ? workspaceLayout.leftOrder : workspaceLayout.rightOrder).filter(isWorkspaceWindowId);
+    const orderedIds =
+      !isMobileViewport && desktopQuickBarPinned ? orderedIdsBase.filter((windowId) => windowId !== 'quickActions') : orderedIdsBase;
     if (isMobileViewport) {
       if (!orderedIds.includes(mobileActiveWindow)) {
         return null;
@@ -2611,18 +3114,30 @@ export default function App(): JSX.Element {
           onDrop={onColumnDrop(column)}
           onDragLeave={onColumnDragLeave(column)}
         >
-          {activeIds.map((windowId, index) => {
+          {activeIds.map((windowId) => {
             const height = clampWindowHeight(workspaceLayout.windowHeights?.[windowId] ?? 360);
             const mobileHeight = mobilePanelHeight ?? height;
             const density: WindowDensity = 'tiny';
             const canEditWidth = workspaceLayout.windowsResizable && !workspaceLayout.sizesLocked;
+            const directionalDrop =
+              dragTarget?.column === column && dragTarget.anchorId === windowId ? dragTarget.direction : null;
+            const dropClass =
+              directionalDrop === 'left' || directionalDrop === 'right'
+                ? `inline-drop-${directionalDrop}`
+                : directionalDrop === 'top'
+                  ? 'drop-target-top'
+                  : directionalDrop === 'bottom'
+                    ? 'drop-target-bottom'
+                    : '';
             return (
               <div
                 ref={(element) => {
                   windowCellRefs.current[windowId] = element;
                 }}
                 key={windowId}
-                className={`workspace-cell mobile-active-cell ${workspaceLayout.windowsResizable ? 'sizing-mode' : ''} ${selectedWindowId === windowId ? 'selected-cell' : ''}`}
+                className={`workspace-cell mobile-active-cell ${workspaceLayout.windowsResizable ? 'sizing-mode' : ''} ${selectedWindowId === windowId ? 'selected-cell' : ''} ${
+                  dropClass
+                }`}
                 style={
                   {
                     '--window-width': '100%',
@@ -2630,6 +3145,7 @@ export default function App(): JSX.Element {
                   } as CSSProperties
                 }
                 data-density={density}
+                data-window-id={windowId}
               >
                 <div
                   className={`workspace-window window-${windowId} ${workspaceLayout.locked ? 'locked' : 'unlocked'} ${draggingWindowId === windowId ? 'dragging' : ''} ${selectedWindowId === windowId ? 'editing-active' : ''} ${resizingWindowId === windowId ? 'resizing' : ''}`}
@@ -2742,8 +3258,6 @@ export default function App(): JSX.Element {
                     </button>
                   ) : null}
                 </div>
-
-                {!workspaceLayout.locked && dragTarget?.column === column && dragTarget.index === index + 1 ? <div className="drop-indicator" aria-hidden="true" /> : null}
               </div>
             );
           })}
@@ -2762,20 +3276,30 @@ export default function App(): JSX.Element {
         onDrop={onColumnDrop(column)}
         onDragLeave={onColumnDragLeave(column)}
       >
-        {!workspaceLayout.locked && dragTarget?.column === column && dragTarget.index === 0 ? <div className="drop-indicator" aria-hidden="true" /> : null}
-
-        {orderedIds.map((windowId, index) => {
+        {orderedIds.map((windowId) => {
           const width = clampWindowWidth(workspaceLayout.windowWidths?.[windowId] ?? 100);
           const height = clampWindowHeight(workspaceLayout.windowHeights?.[windowId] ?? 360);
           const density = windowDensities[windowId] ?? 'regular';
           const canEditWidth = workspaceLayout.windowsResizable && !workspaceLayout.sizesLocked;
+          const directionalDrop =
+            dragTarget?.column === column && dragTarget.anchorId === windowId ? dragTarget.direction : null;
+          const dropClass =
+            directionalDrop === 'left' || directionalDrop === 'right'
+              ? `inline-drop-${directionalDrop}`
+              : directionalDrop === 'top'
+                ? 'drop-target-top'
+                : directionalDrop === 'bottom'
+                  ? 'drop-target-bottom'
+                  : '';
           return (
             <div
               ref={(element) => {
                 windowCellRefs.current[windowId] = element;
               }}
               key={windowId}
-              className={`workspace-cell ${workspaceLayout.windowsResizable ? 'sizing-mode' : ''} ${selectedWindowId === windowId ? 'selected-cell' : ''}`}
+              className={`workspace-cell ${workspaceLayout.windowsResizable ? 'sizing-mode' : ''} ${selectedWindowId === windowId ? 'selected-cell' : ''} ${
+                dropClass
+              }`}
               style={
                 {
                   '--window-width': `${width}%`,
@@ -2783,6 +3307,7 @@ export default function App(): JSX.Element {
                 } as CSSProperties
               }
               data-density={density}
+              data-window-id={windowId}
             >
               <div
                 className={`workspace-window window-${windowId} ${workspaceLayout.locked ? 'locked' : 'unlocked'} ${draggingWindowId === windowId ? 'dragging' : ''} ${selectedWindowId === windowId ? 'editing-active' : ''} ${resizingWindowId === windowId ? 'resizing' : ''}`}
@@ -2893,10 +3418,8 @@ export default function App(): JSX.Element {
                   >
                     ⇲
                   </button>
-                ) : null}
-              </div>
-
-              {!workspaceLayout.locked && dragTarget?.column === column && dragTarget.index === index + 1 ? <div className="drop-indicator" aria-hidden="true" /> : null}
+                  ) : null}
+                </div>
             </div>
           );
         })}
@@ -2943,20 +3466,132 @@ export default function App(): JSX.Element {
     };
   })();
 
+  const renderHeroMenu = (): JSX.Element => (
+    <div className="hero-menu-wrap" ref={heroMenuRef}>
+      <button
+        type="button"
+        className="icon-btn hero-menu-btn"
+        aria-label="Open main menu"
+        aria-haspopup="menu"
+        aria-expanded={showHeroMenu}
+        aria-controls="hero-main-menu"
+        onClick={() => {
+          setShowHeroMenu((previous) => !previous);
+        }}
+      >
+        <span className="burger-icon" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </button>
+      {showHeroMenu ? (
+        <div id="hero-main-menu" className="hero-menu-popover" role="menu" aria-label="Main menu">
+          {isMobileViewport ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowHeroMenu(false);
+                  setShowThemeModal(true);
+                }}
+              >
+                Palette
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowHeroMenu(false);
+                  setShowModifiersModal(true);
+                }}
+              >
+                Stats & Saves
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowHeroMenu(false);
+                  openSetupGuide();
+                }}
+              >
+                Setup Guide
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setShowHeroMenu(false);
+              setShowFeedbackModal(true);
+            }}
+          >
+            Feedback & Accessibility
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <main
-      className={['app-shell', 'mobile-panel-nav-enabled', resultHighlight ? `result-highlight-${resultHighlight}` : '']
+      className={[
+        'app-shell',
+        `ui-theme-${sceneTheme}`,
+        'mobile-panel-nav-enabled',
+        !isMobileViewport && desktopQuickBarPinned ? 'desktop-quick-nav-active' : '',
+        resultHighlight ? `result-highlight-${resultHighlight}` : ''
+      ]
         .filter(Boolean)
         .join(' ')}
       style={{ backgroundImage: currentBackground.image }}
     >
       <div className="overlay" />
       <div className="content">
-        <header className="hero hero-shell">
-          <div className="hero-actions">
-            <div className="hero-action-row">
-              {!isMobileViewport ? (
-                <>
+        <header className="hero">
+          {isMobileViewport ? <div className="hero-mobile-menu-row">{renderHeroMenu()}</div> : null}
+          <section className="hero-command-deck panel">
+            <div className="hero-primary-row">
+              <button
+                type="button"
+                className={`hero-room-btn ${isMobileViewport ? 'hero-room-btn-inline' : ''}`.trim()}
+                aria-label="Open player and shared room controls"
+                aria-haspopup="dialog"
+                ref={roomButtonRef}
+                onClick={() => setShowRoomModal(true)}
+              >
+                {connectedRoomCode
+                  ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
+                  : 'Player & Shared Room'}
+              </button>
+
+            </div>
+
+            <div className="hero-metric-grid" aria-label="Workspace summary">
+              <article className="hero-metric-card hero-metric-card-accent">
+                <span>Player Alias</span>
+                <strong>{data.preferences.playerAlias}</strong>
+              </article>
+              <article className="hero-metric-card">
+                <span>Active Setup</span>
+                <strong>{activeModifierSetup?.name ?? 'Default Setup'}</strong>
+              </article>
+              <article className="hero-metric-card">
+                <span>Saved Presets</span>
+                <strong>{data.presets.length}</strong>
+              </article>
+              <article className="hero-metric-card">
+                <span>{connectedRoomCode ? 'Room Feed' : 'Local History'}</span>
+                <strong>{visibleEntries.length}</strong>
+              </article>
+            </div>
+
+            {!isMobileViewport ? (
+              <div className="hero-action-row">
+                <div className="hero-action-controls">
                   <button
                     type="button"
                     className="icon-btn"
@@ -2969,7 +3604,7 @@ export default function App(): JSX.Element {
                   <button
                     type="button"
                     className="hero-action-btn"
-                    aria-label="Open stat and save modifiers"
+                    aria-label="Open stat and save setups"
                     aria-haspopup="dialog"
                     onClick={() => setShowModifiersModal(true)}
                   >
@@ -2992,120 +3627,27 @@ export default function App(): JSX.Element {
                   >
                     Setup Guide
                   </button>
-                </>
-              ) : null}
-              {isMobileViewport ? (
-                <button
-                  type="button"
-                  className="hero-room-btn hero-room-btn-inline"
-                  aria-label="Open player and shared room controls"
-                  aria-haspopup="dialog"
-                  ref={roomButtonRef}
-                  onClick={() => setShowRoomModal(true)}
-                >
-                  {connectedRoomCode
-                    ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
-                    : 'Player & Shared Room'}
-                </button>
-              ) : null}
-              <div className="hero-menu-wrap" ref={heroMenuRef}>
-                <button
-                  type="button"
-                  className="icon-btn hero-menu-btn"
-                  aria-label="Open main menu"
-                  aria-haspopup="menu"
-                  aria-expanded={showHeroMenu}
-                  aria-controls="hero-main-menu"
-                  onClick={() => {
-                    setShowHeroMenu((previous) => !previous);
-                  }}
-                >
-                  <span className="burger-icon" aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                </button>
-                {showHeroMenu ? (
-                  <div id="hero-main-menu" className="hero-menu-popover" role="menu" aria-label="Main menu">
-                    {isMobileViewport ? (
-                      <>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setShowHeroMenu(false);
-                            setShowThemeModal(true);
-                          }}
-                        >
-                          Palette
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setShowHeroMenu(false);
-                            setShowModifiersModal(true);
-                          }}
-                        >
-                          Stats & Saves
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setShowHeroMenu(false);
-                            openSetupGuide();
-                          }}
-                        >
-                          Setup Guide
-                        </button>
-                      </>
-                    ) : null}
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setShowHeroMenu(false);
-                        setShowFeedbackModal(true);
-                      }}
-                    >
-                      Feedback & Accessibility
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
+                  <button
+                    type="button"
+                    className="hero-action-btn"
+                    aria-label="Open feedback and accessibility options"
+                    aria-haspopup="dialog"
+                    onClick={() => setShowFeedbackModal(true)}
+                  >
+                    Feedback
+                  </button>
+                </div>
 
-            {!isMobileViewport ? (
-              <button
-                type="button"
-                className="hero-room-btn"
-                aria-label="Open player and shared room controls"
-                aria-haspopup="dialog"
-                ref={roomButtonRef}
-                onClick={() => setShowRoomModal(true)}
-              >
-                {connectedRoomCode
-                  ? `Player & Shared Room • ${connectedRoomCode} • ${presenceMembers.length} online`
-                  : 'Player & Shared Room'}
-              </button>
+                <div className="layout-status-row">
+                  <span className="badge">Storage: {storageKind === 'opfs' ? 'OPFS file' : 'IndexedDB fallback'}</span>
+                  <span className="badge">Realtime: {realtimeReady ? 'Supabase enabled' : 'Not configured'}</span>
+                  <span className="badge">{workspaceLayout.locked ? 'Windows locked' : 'Windows unlocked'}</span>
+                  <span className="badge">{workspaceLayout.windowsResizable ? 'Block sizing on' : 'Block sizing off'}</span>
+                  <span className="badge">Columns {workspaceLayout.columnSplit}/{100 - (workspaceLayout.columnSplit ?? 45)}</span>
+                </div>
+              </div>
             ) : null}
-
-            {!isMobileViewport ? (
-              <div className="layout-status-row">
-                <span className="badge">Storage: {storageKind === 'opfs' ? 'OPFS file' : 'IndexedDB fallback'}</span>
-                <span className="badge">Realtime: {realtimeReady ? 'Supabase enabled' : 'Not configured'}</span>
-                <span className="badge">{workspaceLayout.locked ? 'Windows locked' : 'Windows unlocked'}</span>
-                <span className="badge">{workspaceLayout.windowsResizable ? 'Block sizing on' : 'Block sizing off'}</span>
-                <span className="badge">Columns {workspaceLayout.columnSplit}/{100 - (workspaceLayout.columnSplit ?? 45)}</span>
-              </div>
-            ) : (
-              <div className="mobile-view-title" aria-live="polite">
-                <span>{MOBILE_VIEW_LABELS[mobileActiveWindow]}</span>
-              </div>
-            )}
-          </div>
+          </section>
         </header>
 
         {(error || localError || statusMessage) && (
@@ -3218,14 +3760,96 @@ export default function App(): JSX.Element {
           </aside>
         ) : null}
 
+        {!isMobileViewport && desktopQuickBarPinned ? (
+          <div
+            className={`desktop-quick-nav ${desktopQuickBarDragging ? 'is-dragging' : ''}`.trim()}
+            role="navigation"
+            aria-label="Sticky quick actions"
+            ref={desktopQuickBarRef}
+            style={desktopQuickBarStyle}
+          >
+            <button
+              type="button"
+              className="desktop-quick-nav-drag-handle"
+              onPointerDown={onDesktopQuickBarDragStart}
+              onPointerMove={onDesktopQuickBarDragMove}
+              onPointerUp={endDesktopQuickBarDrag}
+              onPointerCancel={endDesktopQuickBarDrag}
+              onLostPointerCapture={endDesktopQuickBarDrag}
+              aria-label="Move sticky quick actions bar"
+              title="Drag to move sticky quick actions bar"
+            >
+              ⋮⋮
+            </button>
+            <div className="desktop-quick-nav-main">
+              <div className="desktop-quick-nav-actions">
+                <button type="button" className="desktop-quick-nav-btn desktop-quick-nav-btn-public" onClick={runQuickPublicD20}>
+                  1d20
+                </button>
+                <button type="button" className="desktop-quick-nav-btn desktop-quick-nav-btn-secret" onClick={runQuickSecretD20}>
+                  Secret d20
+                </button>
+                <button type="button" className="desktop-quick-nav-btn desktop-quick-nav-btn-random" onClick={runQuickRandomBatch}>
+                  Random
+                </button>
+              </div>
+              {stickyFavoritePresets.length > 0 ? (
+                <div className="desktop-quick-nav-list">
+                  <span className="desktop-quick-nav-label">Favorites</span>
+                  <div className="desktop-quick-nav-chip-row">
+                    {stickyFavoritePresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className="quick-chip-btn"
+                        onClick={() => {
+                          runPresetInstantRoll(preset.id);
+                        }}
+                      >
+                        {preset.name}
+                      </button>
+                    ))}
+                    {stickyFavoriteOverflow > 0 ? <span className="desktop-quick-nav-more">+{stickyFavoriteOverflow}</span> : null}
+                  </div>
+                </div>
+              ) : null}
+              {stickyRecentActions.length > 0 ? (
+                <div className="desktop-quick-nav-list">
+                  <span className="desktop-quick-nav-label">Recent</span>
+                  <div className="desktop-quick-nav-chip-row">
+                    {stickyRecentActions.map((action) => (
+                      <button key={action.id} type="button" className="quick-chip-btn" onClick={() => runRecentAction(action.id)}>
+                        <span>{action.label}</span>
+                      </button>
+                    ))}
+                    {stickyRecentOverflow > 0 ? <span className="desktop-quick-nav-more">+{stickyRecentOverflow}</span> : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="desktop-quick-nav-close"
+              onClick={() => setDesktopQuickBarPinned(false)}
+              aria-label="Disable sticky quick actions bar"
+              title="Disable sticky quick actions bar"
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
+
         {isMobileViewport ? (
           <div className="mobile-bottom-stack" ref={mobileBottomStackRef}>
             <div className="mobile-quick-actions" aria-label="Mobile quick actions">
-              <button type="button" onClick={runQuickPublicD20}>
+              <button type="button" className="mobile-quick-btn mobile-quick-btn-public" onClick={runQuickPublicD20}>
                 1d20
               </button>
-              <button type="button" onClick={runQuickSecretD20}>
+              <button type="button" className="mobile-quick-btn mobile-quick-btn-secret" onClick={runQuickSecretD20}>
                 Secret d20
+              </button>
+              <button type="button" className="mobile-quick-btn mobile-quick-btn-random" onClick={runQuickRandomBatch}>
+                Random
               </button>
             </div>
             <nav className="mobile-panel-nav" aria-label="Mobile panel navigation">
@@ -3404,7 +4028,7 @@ export default function App(): JSX.Element {
         ) : null}
 
         {showModifiersModal ? (
-          <Modal title="Stat & Save Modifiers" onClose={() => setShowModifiersModal(false)} className="modifiers-modal-shell">
+          <Modal title="Stat & Save Setups" onClose={() => setShowModifiersModal(false)} className="modifiers-modal-shell">
             {modifiersPanel}
           </Modal>
         ) : null}
@@ -3412,9 +4036,13 @@ export default function App(): JSX.Element {
         {showLayoutModal ? (
           <Modal title="Layout Studio" onClose={() => setShowLayoutModal(false)} className="layout-modal-shell">
             <section className="panel layout-studio-panel">
-              <p className="panel-subtitle">
-                Tune the block workspace: move panels, resize widths, and reset the entire arrangement.
-              </p>
+              <div className="panel-title-row">
+                <h2>Layout Studio</h2>
+                <InfoHint
+                  text="Tune the block workspace: move panels, resize widths, and reset the entire arrangement."
+                  label="About layout studio"
+                />
+              </div>
               <div className="row wrap gap-sm layout-toggle-row">
                 <button type="button" className="window-lock-btn" onClick={() => setLayoutLocked(!workspaceLayout.locked)} aria-pressed={!workspaceLayout.locked}>
                   {workspaceLayout.locked ? 'Unlock Windows' : 'Lock Windows'}
@@ -3499,7 +4127,13 @@ export default function App(): JSX.Element {
         {showFeedbackModal ? (
           <Modal title="Feedback & Accessibility" onClose={() => setShowFeedbackModal(false)} className="feedback-modal-shell">
             <section className="panel feedback-panel">
-              <p className="panel-subtitle">Tune visual emphasis, sound, haptics, and reduced motion behavior.</p>
+              <div className="panel-title-row">
+                <h2>Feedback & Accessibility</h2>
+                <InfoHint
+                  text="Tune visual emphasis, sound, haptics, and reduced motion behavior."
+                  label="About feedback and accessibility"
+                />
+              </div>
               <div className="quick-toggle-grid">
                 <label className="inline-toggle" htmlFor="feedback-result-fx-enabled">
                   <input

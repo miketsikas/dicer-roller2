@@ -19,6 +19,13 @@ export interface CharacterModifiers {
   saves: Record<SaveKey, ModifierField>;
 }
 
+export interface ModifierSetup {
+  id: string;
+  name: string;
+  modifiers: CharacterModifiers;
+  updatedAt: number;
+}
+
 export interface WorkspaceLayout {
   locked: boolean;
   leftOrder: string[];
@@ -104,6 +111,8 @@ export interface AppData {
   lastCleanupAt: number;
   preferences: Preferences;
   characterModifiers: CharacterModifiers;
+  modifierSetups: ModifierSetup[];
+  activeModifierSetupId: string;
   workspaceLayout: WorkspaceLayout;
   rollHistory: RollEntry[];
   presets: SavedPreset[];
